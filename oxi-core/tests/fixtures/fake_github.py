@@ -1,0 +1,79 @@
+"""FakeGitHubClient — deterministic stub for pr_watcher/auto_merge tests.
+
+Lives under tests/fixtures so it's test-only infrastructure. The fake
+lets tests pre-configure PR state (open, merged, closed, CI status)
+and then observe what the production code does against that state.
+"""
+
+from __future__ import annotations
+
+from oxi_core.v3.github_client import (
+    GitHubClient,
+    PRCheckStatus,
+    PRState,
+    PullRequest,
+)
+
+
+class FakeGitHubClient:
+    """In-memory GitHub. Supports the ``GitHubClient`` protocol."""
+
+    def __init__(self) -> None:
+        # repo → {pr_number: PullRequest}
+        self._prs: dict[str, dict[int, PullRequest]] = {}
+        self._merge_calls: list[tuple[str, int, str]] = []
+
+    # ---- Test setup helpers ------------------------------------------
+
+    def add_pr(self, repo: str, pr: PullRequest) -> None:
+        self._prs.setdefault(repo, {})[pr.number] = pr
+
+    def set_pr_state(self, repo: str, pr_number: int, state: PRState) -> None:
+        old = self._prs[repo][pr_number]
+        self._prs[repo][pr_number] = PullRequest(
+            number=old.number, title=old.title, head_branch=old.head_branch,
+            state=state, check_status=old.check_status, mergeable=old.mergeable,
+        )
+
+    def set_check_status(
+        self, repo: str, pr_number: int, status: PRCheckStatus
+    ) -> None:
+        old = self._prs[repo][pr_number]
+        self._prs[repo][pr_number] = PullRequest(
+            number=old.number, title=old.title, head_branch=old.head_branch,
+            state=old.state, check_status=status, mergeable=old.mergeable,
+        )
+
+    @property
+    def merge_calls(self) -> tuple[tuple[str, int, str], ...]:
+        """History of merge_pr invocations for test assertions."""
+        return tuple(self._merge_calls)
+
+    # ---- GitHubClient protocol ---------------------------------------
+
+    def list_open_prs(
+        self, repo: str, head_prefix: str | None = None
+    ) -> tuple[PullRequest, ...]:
+        by_num = self._prs.get(repo, {})
+        open_prs = [p for p in by_num.values() if p.state is PRState.OPEN]
+        if head_prefix is not None:
+            open_prs = [p for p in open_prs if p.head_branch.startswith(head_prefix)]
+        return tuple(open_prs)
+
+    def get_pr(self, repo: str, pr_number: int) -> PullRequest | None:
+        return self._prs.get(repo, {}).get(pr_number)
+
+    def merge_pr(
+        self, repo: str, pr_number: int, *, method: str = "squash"
+    ) -> bool:
+        self._merge_calls.append((repo, pr_number, method))
+        pr = self._prs.get(repo, {}).get(pr_number)
+        if pr is None:
+            return False
+        # Flip to merged.
+        self.set_pr_state(repo, pr_number, PRState.MERGED)
+        return True
+
+
+# Type-check that FakeGitHubClient satisfies the protocol.
+_: GitHubClient = FakeGitHubClient()
