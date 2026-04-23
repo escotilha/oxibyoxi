@@ -1,0 +1,53 @@
+# CI workflow for oxi.
+#
+# Security review notes (per GitHub Actions injection guidance):
+#   - No ${{ github.event.* }} interpolation anywhere in run: blocks.
+#   - No user-controlled inputs (issue titles, PR bodies, commit messages,
+#     branch refs) are passed to shell commands.
+#   - permissions is set to contents: read (no write, no packages, no id-token).
+#   - All run: commands execute static scripts or package managers against
+#     checked-out code. No dynamic command construction from event payloads.
+#   - No self-hosted runners.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-for-leaks:
+    name: lint-for-leaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run leak-lint
+        run: ./scripts/lint-for-leaks.sh
+
+  python:
+    name: python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install oxi-core (editable) + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./oxi-core[dev]"
+      - name: Ruff
+        working-directory: oxi-core
+        run: ruff check .
+      - name: Pytest
+        working-directory: oxi-core
+        run: pytest -q

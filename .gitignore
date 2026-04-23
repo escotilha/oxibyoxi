@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+wheels/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Oxi runtime
+.oxi/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local env
+.env
+.env.local
+
+# Coverage
+.coverage
+htmlcov/
+.venv/
