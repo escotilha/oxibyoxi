@@ -121,10 +121,10 @@ class Task:
 def _safe_pr_number(row: sqlite3.Row) -> int | None:
     """Return row['pr_number'] if the column exists, else None.
 
-    The current schema does not include ``pr_number`` yet; it will be
-    added by a future migration when pr_watcher lands. For now this
-    helper returns None so the orphan-with-PR invariant is always
-    False (no task has a PR) — correct behavior during Phase 1.
+    As of migration v2, the ``pr_number`` column exists on the ``task``
+    table. Rows pre-dating the migration have NULL. The defensive
+    try/except also covers adapter-provided DBs that haven't run
+    migrations yet — calling modules should not need to care.
     """
     try:
         return row["pr_number"]
