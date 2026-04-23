@@ -57,12 +57,14 @@ FORBIDDEN=(
   "escotilha/psos"
 )
 
-# Paths to scan. Everything shipped to users, plus adapters and docs.
+# Paths to scan. Everything shipped to users, plus adapters, docs, and the
+# sample-project fixture (any leak in the fixture would also be visible).
 SCAN_PATHS=(
   "oxi-core/src"
   "adapters/_reference"
   "adapters/_template"
   "docs"
+  "sample-project"
 )
 
 # Paths explicitly exempt from scanning. These are the only places the
