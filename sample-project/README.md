@@ -1,5 +1,22 @@
 # sample-project
 
-Tiny throwaway repo that oxi can drive for end-to-end tests and demos. Not a real product.
+Throwaway Python package that the reference oxi adapter drives in end-to-end tests and demos.
 
-**Status:** stub. Phase 1 populates with a `roadmap.md`, an empty `src/`, and a pytest suite so the reference adapter has something to operate on.
+This is not a real product. It exists so the orchestrator's loop can be exercised against something that looks like a real project but carries no semantic weight.
+
+## Layout
+
+```
+sample-project/
+├── pyproject.toml          Standalone package, pytest configured
+├── roadmap.md              Three toy tasks the adapter reads
+├── src/sample_project/     Empty module plus one trivial function
+└── tests/                  Pytest suite against the module
+```
+
+## Run tests
+
+```bash
+pip install -e ".[dev]"
+pytest -q
+```
