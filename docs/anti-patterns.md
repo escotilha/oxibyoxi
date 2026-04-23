@@ -60,13 +60,21 @@ If rollback takes more than one command, operators hesitate, which makes the win
 
 **Enforcement:** CI job `test-rollback.yml` runs on every release tag.
 
-## 8. Secrets never land in committed files
+## 8. Secrets never land in committed files or conversations
 
-Tokens, passwords, OAuth credentials, PFX files — committed once, leaked forever (git history retains them even after force-push, and force-pushes on shared branches are forbidden anyway).
+Tokens, passwords, OAuth credentials, PFX files — committed once, leaked forever (git history retains them even after force-push, and force-pushes on shared branches are forbidden anyway). The same applies to LLM conversation transcripts: a secret pasted into a chat window is a secret exfiltrated.
 
-**Rule:** secrets live only in env vars. Locally loaded from OS keychain. Remotely from GHA Secrets or the platform's secret store.
+**Rule:**
 
-**Enforcement:** `gitleaks` in CI. Pre-commit hook runs `gitleaks protect` locally.
+- Secrets live only in env vars. Locally loaded from OS keychain. Remotely from GHA Secrets or the platform's secret store.
+- Never paste a secret into an LLM chat. Pipe clipboard → keychain in one shell command; LLM picks up from keychain, never from the message.
+- Never echo a full secret in tool output; verify by prefix + length only (`| head -c 10; wc -c`).
+
+**Enforcement:**
+
+- `gitleaks` in CI on every PR.
+- Pre-commit hook runs `gitleaks protect` locally.
+- `scripts/release.sh` reads the PyPI token from Keychain by service name; the token never appears in shell history or process arguments.
 
 ## 9. No `--no-verify`, no `--force-push` to shared branches
 
