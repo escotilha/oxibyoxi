@@ -134,11 +134,14 @@ def test_connect_is_idempotent(tmp_path: Path) -> None:
 
 
 def test_current_schema_version_reflects_applied_migrations(tmp_path: Path) -> None:
+    """Freshly created DB reflects the highest migration in ``MIGRATIONS``."""
     path = tmp_path / "oxi.db"
     register_adapter(_TestAdapter(db_path_value=str(path)))
     handle = db.connect()
     try:
-        assert db.current_schema_version(handle.connection) == 1
+        assert db.current_schema_version(handle.connection) == max(
+            v for v, _ in db.MIGRATIONS
+        )
     finally:
         handle.connection.close()
 

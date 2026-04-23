@@ -110,11 +110,20 @@ CREATE TABLE IF NOT EXISTS front (
 """
 
 
+# Version 2: pr_number column for pr_watcher (P1-6) and for heartbeat's
+# orphan-with-PR guard. Nullable by design — not every task has a PR.
+MIGRATION_V2_PR_NUMBER: str = """
+ALTER TABLE task ADD COLUMN pr_number INTEGER;
+CREATE INDEX IF NOT EXISTS idx_task_pr_number ON task(pr_number);
+"""
+
+
 # Migration list — append-only. Each (version, sql) pair runs in order if
 # not already recorded in schema_migrations. Do NOT edit applied migrations;
 # add a new one instead.
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, SCHEMA_SQL),
+    (2, MIGRATION_V2_PR_NUMBER),
 )
 
 
