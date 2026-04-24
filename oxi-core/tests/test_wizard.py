@@ -53,8 +53,42 @@ def _sample_answers(**overrides) -> WizardAnswers:
 # ---------------------------------------------------------------------------
 
 
-def test_collect_happy_path_with_all_defaults(capsys):
-    """Operator hits enter for every default-offered prompt."""
+def test_collect_happy_path_with_all_defaults(capsys, monkeypatch):
+    """Operator hits enter for every default-offered prompt.
+
+    Defaults for budget caps and max_concurrent come from the
+    compute_probe; monkeypatch it to a known recommendation so the
+    test is deterministic regardless of the machine running CI
+    (locally a 48 GB Mac mini sees max_concurrent=10, the GitHub
+    Actions runner sees something smaller).
+    """
+    from oxi_core import compute_probe, wizard
+
+    fake_capacity = compute_probe.HostCapacity(
+        ram_gb=16.0, cpu_cores=4, plan_tier="standard", platform_name="Linux"
+    )
+    fake_rec = compute_probe.ComputeRecommendation(
+        max_concurrent=3,
+        daily_soft_warn_usd=5.0,
+        daily_hard_cap_usd=20.0,
+        per_task_opus_usd=2.0,
+        per_task_sonnet_usd=0.50,
+        rationale="(test fixture)",
+    )
+
+    def fake_probe_and_recommend(**_kw):
+        return fake_capacity, fake_rec
+
+    monkeypatch.setattr(
+        compute_probe, "probe_and_recommend", fake_probe_and_recommend,
+    )
+    # wizard imports it locally inside collect_answers, so we patch the
+    # module attribute to ensure both lookup paths work.
+    monkeypatch.setattr(
+        wizard, "probe_and_recommend",
+        fake_probe_and_recommend, raising=False,
+    )
+
     inputs = [
         "my project",   # project name
         "",             # adapter slug (default)
