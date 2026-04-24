@@ -461,11 +461,26 @@ async def dispatch_one(
         session_tag=DEFAULT_SESSION_TAG,
     )
 
+    # Check for a deep_fix escalation override for this task.
+    # ``deep_fix.run`` resets failed tasks to ``planned`` and writes a
+    # ``deep_fix_escalated`` event with a model override and prompt note.
+    # We read that here and adjust the invocation accordingly.
+    from . import deep_fix as deep_fix_mod
+    escalation = deep_fix_mod.get_escalation_override(conn, task.id)
+
     # Compose the prompt and assemble the invocation.
-    prompt = dispatch_prompt(task.as_roadmap_item(), branch_name=handle.branch)
+    base_prompt = dispatch_prompt(task.as_roadmap_item(), branch_name=handle.branch)
+    if escalation and escalation.prompt_note:
+        prompt = f"{escalation.prompt_note}\n\n{base_prompt}"
+    else:
+        prompt = base_prompt
+
     session_id = generate_session_id()
     budget = adapter.budget()
-    model_name = _pick_model(adapter)
+    if escalation and escalation.model:
+        model_name = escalation.model
+    else:
+        model_name = _pick_model(adapter)
 
     invocation = DispatchInvocation(
         prompt=prompt,

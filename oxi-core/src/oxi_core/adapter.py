@@ -158,6 +158,19 @@ class DispatchPolicy:
     tier_zero_absorb: bool = True
 
 
+# EscalationConfig is defined in v3.deep_fix to avoid a circular
+# import (adapter ← deep_fix ← dispatch ← adapter).  Adapters that
+# want to customise deep_fix behaviour import it directly:
+#
+#   from oxi_core.v3.deep_fix import EscalationConfig, EscalationRecipe
+#
+# and implement an ``escalation_config()`` method on their adapter class.
+# The engine reads this method if it exists; adapters that omit it fall
+# back to the ``EscalationConfig`` defaults.  The method is intentionally
+# NOT part of the ``Adapter`` Protocol below so that existing adapters
+# written before T1-13 continue to satisfy the protocol without changes.
+
+
 # --- Protocol ----------------------------------------------------------
 
 
