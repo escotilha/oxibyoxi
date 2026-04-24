@@ -80,19 +80,21 @@ class SelfAdapter:
     # ---- Dispatch ----
 
     def dispatch_hosts(self) -> tuple[DispatchHost, ...]:
-        # Bumped from 1 → 3 for the polish-sprint phase. Three parallel
-        # claude sessions fit comfortably within the Mac Mini's memory
-        # envelope (each worker is ~1-2 GB resident), stay under plan
-        # rate limits, and give the reviewer a manageable per-hour
-        # merge load. Goal of 10 deferred to T3-2 (onboarding compute
-        # probe) — bump by hand in staged increments while we watch
-        # the dispatcher for contention and the critic for quality
-        # regression.
+        # Operator target: 10 concurrent dispatches. Mac Mini M4 Pro
+        # with 48 GB RAM handles this comfortably (each claude session
+        # is ~1–2 GB resident). Plan tier is 20x — rate limits are not
+        # the bottleneck. Daily hard-cap ($20 in budget()) still
+        # bounds runaway dispatches — 10 parallel * $0.70/dispatch ≈
+        # $7/wave, so ~3 waves before hard-stop.
+        #
+        # Future: T3-2 compute-aware onboarding will probe the host
+        # and recommend this number automatically. Hand-set here
+        # because the operator explicitly wanted 10.
         return (
             DispatchHost(
                 name="local",
                 ssh_alias=None,
-                max_concurrent=3,
+                max_concurrent=10,
                 worktree_root=str(self.repo_root / ".oxi" / "worktrees"),
             ),
         )

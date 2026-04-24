@@ -83,12 +83,11 @@ def test_dispatch_host_is_serial_local(tmp_path: Path):
     assert isinstance(host, DispatchHost)
     assert host.name == "local"
     assert host.ssh_alias is None
-    # Bumped to 3 for polish-sprint phase. Still bounded — this test
-    # asserts the cap exists and is small, not the exact integer, so
-    # future tuning (toward T3-2 compute-aware onboarding) doesn't
-    # require editing both the adapter and the test in lockstep.
-    assert 1 <= host.max_concurrent <= 5, \
-        f"dogfood concurrency should stay modest, got {host.max_concurrent}"
+    # Operator-set concurrency target. Bound at 10 as the ceiling —
+    # higher requires a hardware story (T3-2 compute-aware onboarding)
+    # because the Mac Mini memory envelope tops out around there.
+    assert 1 <= host.max_concurrent <= 10, \
+        f"dogfood concurrency exceeds hardware envelope: {host.max_concurrent}"
 
 
 def test_plan_tier_is_20x(tmp_path: Path):
