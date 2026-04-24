@@ -124,6 +124,7 @@ class DispatchInvocation:
     max_turns: int
     allowed_tools: Sequence[str]
     extra_env: dict[str, str] = field(default_factory=dict)
+    anthropic_api_key: str | None = None  # injected into child env; bypass whitelist
     wall_clock_timeout_s: float = 1800.0  # 30 min default
     binary: str = "claude"  # overridable for tests
 
@@ -228,7 +229,10 @@ async def invoke(invocation: DispatchInvocation) -> DispatchResult:
     enforce a wall-clock timeout, classify the exit.
     """
     argv = build_argv(invocation)
-    env = build_env(extra=invocation.extra_env)
+    env = build_env(
+        extra=invocation.extra_env,
+        anthropic_api_key=invocation.anthropic_api_key,
+    )
 
     loop = asyncio.get_running_loop()
     start_time = loop.time()

@@ -372,6 +372,77 @@ async def test_env_whitelist_passes_path_and_extra(tmp_path: Path, monkeypatch):
     assert "PATH" in env_blob
 
 
+@pytest.mark.asyncio
+async def test_anthropic_api_key_reaches_child_from_invocation(
+    tmp_path: Path,
+):
+    """DispatchInvocation.anthropic_api_key must reach the child env.
+
+    Regression test for the pre-0.1.0a1 bug where the parameter was
+    accepted but never threaded through — leading to "claude: no API
+    key" failures with no diagnostic. The fix routes it through
+    build_env's explicit parameter rather than relying on the env
+    whitelist (which would require adding ANTHROPIC_API_KEY to the
+    whitelist and re-exposing it to every subprocess).
+    """
+    inv_base, env_overrides = _invocation("echo_env", cwd=tmp_path)
+    inv = DispatchInvocation(
+        prompt=inv_base.prompt,
+        cwd=inv_base.cwd,
+        session_id=inv_base.session_id,
+        model=inv_base.model,
+        max_budget_usd=inv_base.max_budget_usd,
+        max_turns=inv_base.max_turns,
+        allowed_tools=inv_base.allowed_tools,
+        extra_env=inv_base.extra_env,
+        anthropic_api_key="sk-ant-test-sentinel-12345",
+        wall_clock_timeout_s=inv_base.wall_clock_timeout_s,
+        binary=inv_base.binary,
+    )
+    result = await _run(inv, env_overrides)
+    assistant = next(
+        (e for e in result.events if e.get("type") == "assistant"), None,
+    )
+    assert assistant is not None
+    env_blob = assistant["message"]["content"][0]["text"]
+    assert "sk-ant-test-sentinel-12345" in env_blob
+    assert "ANTHROPIC_API_KEY" in env_blob
+
+
+@pytest.mark.asyncio
+async def test_anthropic_api_key_none_does_not_leak_parent_key(
+    tmp_path: Path, monkeypatch,
+):
+    """When anthropic_api_key is None, the parent's key must NOT leak.
+
+    Defensive: if a supervisor holds ANTHROPIC_API_KEY in its own env
+    but an invocation explicitly chooses not to pass one, the child
+    should get no key — not silently inherit from the whitelist.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-parent-leaked-if-you-see-me")
+    inv_base, env_overrides = _invocation("echo_env", cwd=tmp_path)
+    inv = DispatchInvocation(
+        prompt=inv_base.prompt,
+        cwd=inv_base.cwd,
+        session_id=inv_base.session_id,
+        model=inv_base.model,
+        max_budget_usd=inv_base.max_budget_usd,
+        max_turns=inv_base.max_turns,
+        allowed_tools=inv_base.allowed_tools,
+        extra_env=inv_base.extra_env,
+        anthropic_api_key=None,  # explicit opt-out
+        wall_clock_timeout_s=inv_base.wall_clock_timeout_s,
+        binary=inv_base.binary,
+    )
+    result = await _run(inv, env_overrides)
+    assistant = next(
+        (e for e in result.events if e.get("type") == "assistant"), None,
+    )
+    assert assistant is not None
+    env_blob = assistant["message"]["content"][0]["text"]
+    assert "sk-parent-leaked-if-you-see-me" not in env_blob
+
+
 # ---------------------------------------------------------------------------
 # Process-group isolation
 # ---------------------------------------------------------------------------

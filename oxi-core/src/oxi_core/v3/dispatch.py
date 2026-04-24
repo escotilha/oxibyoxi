@@ -44,7 +44,6 @@ from .dispatch_invoke import (
     Classification,
     DispatchInvocation,
     DispatchResult,
-    build_env,
     generate_session_id,
     invoke,
 )
@@ -324,19 +323,13 @@ async def dispatch_one(
         max_turns=30,
         allowed_tools=("Bash", "Read", "Edit", "Write", "Glob", "Grep"),
         extra_env=dict(extra_env or {}),
+        anthropic_api_key=anthropic_api_key,
         binary=binary,
     )
 
     # Atomic transition before invoke so the DB reflects reality even
     # if we crash mid-dispatch.
     _transition_to_dispatched(conn, task.id, session_id)
-
-    # Ensure ANTHROPIC_API_KEY reaches the child (build_env pulls it from arg).
-    # The invoke() function reads extra_env + base whitelist; we don't
-    # splice the API key here to avoid it ever landing in invocation
-    # captures or logs. invoke() handles it.
-    _ = build_env  # silence unused-import warning; invoke uses it internally
-    _ = anthropic_api_key  # reserved for future structured-env wiring
 
     result = await invoke(invocation)
 

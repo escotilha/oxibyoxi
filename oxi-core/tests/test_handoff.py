@@ -264,6 +264,67 @@ def test_read_latest_returns_none_for_missing_worktree(env):
 
 
 # ---------------------------------------------------------------------------
+# Identifier safety (path-traversal defense)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad_identifier", [
+    "../../../etc/passwd",
+    "../escape",
+    "has/slash",
+    "has spaces",
+    "has;semicolon",
+    "has$(command)",
+    "has\x00null",
+    "",
+    ".",
+    "..",
+])
+def test_write_rejects_path_traversal_identifiers(env, bad_identifier):
+    """A malicious roadmap identifier must not escape the worktree directory."""
+    task_id = _seed_task(env["conn"])
+    with pytest.raises(handoff.UnsafeIdentifierError):
+        handoff.write_snapshot(
+            env["conn"],
+            worktree=env["worktree"],
+            task_id=task_id,
+            identifier=bad_identifier,
+            content="x",
+        )
+
+
+def test_write_accepts_safe_identifiers(env):
+    """Legitimate task identifiers work fine."""
+    task_id = _seed_task(env["conn"])
+    for safe in ["T0-1", "T2-17", "front_name", "Front-With-Hyphens", "abc123"]:
+        handoff.write_snapshot(
+            env["conn"],
+            worktree=env["worktree"],
+            task_id=task_id,
+            identifier=safe,
+            content="x",
+        )
+
+
+def test_write_leaves_no_files_outside_worktree_on_rejection(env):
+    """Even when write_snapshot raises, no file is created outside worktree."""
+    task_id = _seed_task(env["conn"])
+    outside = env["tmp"] / "escape-target"
+    outside.mkdir()
+    # Attempt to escape via relative-path identifier.
+    with pytest.raises(handoff.UnsafeIdentifierError):
+        handoff.write_snapshot(
+            env["conn"],
+            worktree=env["worktree"],
+            task_id=task_id,
+            identifier="../escape-target/pwned",
+            content="injected",
+        )
+    # Nothing landed outside.
+    assert list(outside.iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
 # build_snapshot
 # ---------------------------------------------------------------------------
 

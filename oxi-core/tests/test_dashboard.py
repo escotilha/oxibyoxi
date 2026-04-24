@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -114,6 +115,27 @@ def test_render_includes_pr_number_when_set(conn):
     assert "42" in html
 
 
+def test_render_escapes_pr_number_even_if_string(conn):
+    """Schema declares pr_number INTEGER, but a fork might relax it.
+
+    If a fork ever inserts a string into pr_number (e.g. a webhook
+    payload not coerced through int()), the renderer must escape it
+    like every other user-controlled field.
+    """
+    # Bypass the ORM and write a string directly to simulate the
+    # fork-schema-relaxed case.
+    conn.execute(
+        "INSERT INTO task (identifier, tier, title, status, pr_number) "
+        "VALUES ('T0-1', 0, 't', 'dispatched', ?)",
+        ("<script>alert(1)</script>",),
+    )
+    conn.commit()
+    html = render_html(conn)
+    # Raw script must not appear; escaped form must.
+    assert "<script>alert(1)</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
 # ---------------------------------------------------------------------------
 # HTTP server
 # ---------------------------------------------------------------------------
@@ -192,6 +214,64 @@ def test_server_reflects_db_updates_between_requests(tmp_path: Path):
             f"http://127.0.0.1:{actual_port}/", timeout=5
         ).read().decode("utf-8")
         assert "second" in body2
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_server_returns_404_for_non_root_paths(tmp_path: Path):
+    """Only '/' returns the dashboard; other paths 404.
+
+    Prevents fingerprinting on broader binds and keeps the URL space
+    clean for fork extensions (/healthz, /api, etc.).
+    """
+    register_adapter(_Adapter(db_path_value=str(tmp_path / "oxi.db")))
+    handle = db.connect()
+    handle.connection.close()
+
+    config = DashboardConfig(host="127.0.0.1", port=0)
+    server = make_server(db_path=str(tmp_path / "oxi.db"), config=config)
+    try:
+        actual_port = server.server_address[1]
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+
+        # Root returns 200.
+        resp = urllib.request.urlopen(
+            f"http://127.0.0.1:{actual_port}/", timeout=5,
+        )
+        assert resp.status == 200
+
+        # Any other path returns 404.
+        for bogus in ("/foo", "/admin", "/metrics"):
+            try:
+                urllib.request.urlopen(
+                    f"http://127.0.0.1:{actual_port}{bogus}", timeout=5,
+                )
+                raise AssertionError(f"{bogus} should 404")
+            except urllib.error.HTTPError as e:
+                assert e.code == 404, f"{bogus} returned {e.code}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_server_ignores_querystring_on_root(tmp_path: Path):
+    """Root with ?stuff=x still 200s — querystrings are allowed."""
+    register_adapter(_Adapter(db_path_value=str(tmp_path / "oxi.db")))
+    handle = db.connect()
+    handle.connection.close()
+
+    config = DashboardConfig(host="127.0.0.1", port=0)
+    server = make_server(db_path=str(tmp_path / "oxi.db"), config=config)
+    try:
+        actual_port = server.server_address[1]
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        resp = urllib.request.urlopen(
+            f"http://127.0.0.1:{actual_port}/?x=1", timeout=5,
+        )
+        assert resp.status == 200
     finally:
         server.shutdown()
         server.server_close()

@@ -43,6 +43,16 @@ _SNAPSHOT_RE = re.compile(
     r"(?P<stamp>\d{8}T\d{6}Z)\.md$"
 )
 
+# Identifier must match this to be safe in a filename. Same charset as
+# _SNAPSHOT_RE so a written file can also be read. Rejects path-traversal
+# attempts (e.g. "../../etc/passwd"), shell metacharacters, and anything
+# a roadmap editor could use to escape the worktree directory.
+_SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+class UnsafeIdentifierError(ValueError):
+    """Raised when a task identifier contains filename-unsafe characters."""
+
 
 @dataclass(frozen=True)
 class HandoffReport:
@@ -135,6 +145,15 @@ def write_snapshot(
         raise ValueError(f"keep must be >= 1, got {keep}")
     if not worktree.is_dir():
         raise FileNotFoundError(f"worktree {worktree} does not exist")
+    if not _SAFE_IDENTIFIER_RE.match(identifier):
+        # Path-traversal defense. A roadmap file is operator-supplied,
+        # but it might be reviewed by someone who doesn't control it
+        # (e.g. merged from a contributor PR). Rejecting unsafe
+        # identifiers at the filename layer is the last line of defense.
+        raise UnsafeIdentifierError(
+            f"identifier {identifier!r} contains characters unsafe for "
+            "a filename; allowed: [A-Za-z0-9_-]"
+        )
 
     now_dt = now if now is not None else datetime.now(tz=UTC)
     filename = f"resume-{identifier}-{_iso_compact(now_dt)}.md"
@@ -213,6 +232,7 @@ def read_latest(worktree: Path) -> str | None:
 
 __all__ = [
     "HandoffReport",
+    "UnsafeIdentifierError",
     "build_snapshot",
     "read_latest",
     "write_snapshot",

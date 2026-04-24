@@ -85,7 +85,8 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
         f"<td><code>{html.escape(ident)}</code></td>"
         f"<td>{html.escape(title)}</td>"
         f"<td>{html.escape(status)}</td>"
-        f"<td>{pr if pr is not None else ''}</td>"
+        # pr is INTEGER in schema but forks may relax it; escape defensively.
+        f"<td>{html.escape(str(pr)) if pr is not None else ''}</td>"
         f"<td>{html.escape(last_progress or '')}</td>"
         "</tr>"
         for ident, title, status, pr, last_progress in recent_tasks
@@ -158,6 +159,14 @@ def _handler_factory(db_path_fn, window_hours: int):
             pass
 
         def do_GET(self) -> None:  # noqa: N802 (HTTPServer API)
+            # Only the root path returns the dashboard. Other paths 404
+            # so the server doesn't fingerprint as "anything oxi" for
+            # arbitrary URL probes, and so forks can add /api or
+            # /healthz later without refactoring.
+            path = (self.path or "/").split("?", 1)[0].split("#", 1)[0]
+            if path not in ("/", ""):
+                self.send_error(404)
+                return
             conn = sqlite3.connect(str(db_path_fn()))
             conn.row_factory = sqlite3.Row
             try:

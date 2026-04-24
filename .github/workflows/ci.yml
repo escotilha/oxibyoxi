@@ -8,6 +8,12 @@
 #   - All run: commands execute static scripts or package managers against
 #     checked-out code. No dynamic command construction from event payloads.
 #   - No self-hosted runners.
+#   - Third-party actions pinned to full commit SHAs (not mutable tag refs)
+#     per OpenSSF guidance — prevents a compromised upstream actions/*
+#     namespace from silently running new code in our CI.
+#   - The only ${{ secrets.* }} reference is GITHUB_TOKEN in a safely-scoped
+#     env: block on the gitleaks action (which needs it to post results).
+#     permissions: contents: read further bounds what that token can do.
 
 name: ci
 
@@ -21,12 +27,33 @@ permissions:
 
 jobs:
   lint-for-leaks:
-    name: lint-for-leaks
+    name: lint-for-leaks (forbidden strings)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Run leak-lint
         run: ./scripts/lint-for-leaks.sh
+
+  gitleaks:
+    name: gitleaks (secret patterns)
+    runs-on: ubuntu-latest
+    # gitleaks-action needs pull-requests: write to annotate the PR with
+    # findings; without it the action crashes with "Resource not accessible
+    # by integration". Scoped to this job only — other jobs stay at the
+    # workflow-level contents: read.
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "true"
 
   python:
     name: python ${{ matrix.python-version }}
@@ -36,9 +63,9 @@ jobs:
       matrix:
         python-version: ["3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install oxi-core + reference adapter (editable) + dev deps
@@ -58,3 +85,23 @@ jobs:
       - name: Pytest (reference adapter)
         working-directory: adapters/_reference
         run: pytest -q
+
+  pip-audit:
+    name: pip-audit (dependency CVEs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit + oxi-core
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          python -m pip install -e "./oxi-core[dev]"
+          python -m pip install -e "./adapters/_reference[dev]"
+      - name: Run pip-audit
+        # --ignore-vuln entries target CVEs in pip itself (the CI-image
+        # installer), not runtime deps of oxi. Revisit when the CI image
+        # ships a newer pip.
+        run: pip-audit --strict --ignore-vuln CVE-2025-8869 --ignore-vuln CVE-2026-1703
