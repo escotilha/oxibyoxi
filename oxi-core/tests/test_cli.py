@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from oxi_core import adapter as adapter_mod
 from oxi_core import db
 from oxi_core.adapter import (
     BudgetCaps,
@@ -113,8 +114,13 @@ def test_status_missing_adapter_exits_2(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["status"])
     assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "no adapter" in err.lower()
+    err = capsys.readouterr().err.lower()
+    # Either "no adapter" or "multiple adapters" — both are
+    # registration-attention errors that exit 2. In CI both the
+    # reference and self adapters are installed so `load_adapter`
+    # hits MultipleAdaptersError; in dev with only one adapter
+    # installed we'd see "no adapter".
+    assert "no adapter" in err or "multiple adapters" in err
 
 
 # ---------------------------------------------------------------------------
@@ -354,3 +360,73 @@ def test_version_flag_exits_cleanly(capsys):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert __version__ in out
+
+
+# ---------------------------------------------------------------------------
+# Auto-discovery via OXI_ADAPTER env var (_require_adapter integration)
+# ---------------------------------------------------------------------------
+
+
+def test_require_adapter_auto_loads_via_env_var(tmp_path, monkeypatch, capsys):
+    """_require_adapter loads adapter from OXI_ADAPTER env var (no pre-registration)."""
+    import sys
+    import types
+
+    clear_adapter()
+
+    db_path = str(tmp_path / "oxi.db")
+    ks_path = str(tmp_path / "KS")
+
+    # Inject a synthetic module so importlib.import_module can find the factory.
+    fake_mod = types.ModuleType("_oxi_cli_test_auto")
+
+    def _make():
+        return _Adapter(db_path_value=db_path, release_lock_value=ks_path)
+
+    fake_mod.make = _make  # type: ignore[attr-defined]
+    sys.modules["_oxi_cli_test_auto"] = fake_mod
+    try:
+        monkeypatch.setenv("OXI_ADAPTER", "_oxi_cli_test_auto:make")
+        rc = main(["status"])
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "plan tier" in out
+    finally:
+        del sys.modules["_oxi_cli_test_auto"]
+
+
+def test_require_adapter_multiple_entry_points_exits_2(monkeypatch, capsys):
+    """Multiple installed entry-points with no env var → exit 2, clear message."""
+    clear_adapter()
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    class _FakeEP:
+        def __init__(self, name):
+            self.name = name
+            self.value = "..."
+        def load(self):
+            return _Adapter
+
+    monkeypatch.setattr(
+        adapter_mod, "entry_points",
+        lambda group: [_FakeEP("alpha"), _FakeEP("beta")],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main(["status"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "multiple" in err.lower()
+    assert "OXI_ADAPTER" in err
+
+
+def test_require_adapter_bad_env_var_exits_2(monkeypatch, capsys):
+    """Malformed OXI_ADAPTER value → exit 2 with 'adapter load failed' message."""
+    clear_adapter()
+    monkeypatch.setenv("OXI_ADAPTER", "no_colon_here")
+
+    with pytest.raises(SystemExit) as exc:
+        main(["status"])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "adapter load failed" in err.lower()

@@ -8,17 +8,20 @@ from oxi_core import adapter as adapter_mod
 from oxi_core import defaults
 from oxi_core.adapter import (
     Adapter,
+    AdapterLoadError,
     AdapterNotRegisteredError,
     BudgetCaps,
     DispatchHost,
     DispatchPolicy,
     InvalidAdapterError,
+    MultipleAdaptersError,
     NamingConfig,
     PathsConfig,
     PromoteRecipe,
     RoadmapItem,
     clear_adapter,
     get_active_adapter,
+    load_adapter,
     register_adapter,
 )
 
@@ -224,3 +227,186 @@ def test_module_state_is_process_wide():
     assert adapter_mod._active_adapter is not None
     clear_adapter()
     assert adapter_mod._active_adapter is None
+
+
+# ---------------------------------------------------------------------------
+# load_adapter — auto-discovery
+# ---------------------------------------------------------------------------
+
+
+class _FakeEntryPoint:
+    """Minimal stand-in for importlib.metadata.EntryPoint."""
+
+    def __init__(self, name: str, value: str, cls):
+        self.name = name
+        self.value = value
+        self._cls = cls
+
+    def load(self):
+        return self._cls
+
+
+def test_load_adapter_is_noop_when_already_registered():
+    """If an adapter is already registered, load_adapter does not replace it."""
+    a = _MinimalAdapter()
+    register_adapter(a)
+    load_adapter()  # should not raise or change the active adapter
+    assert get_active_adapter() is a
+
+
+def test_load_adapter_uses_env_var(monkeypatch):
+    """OXI_ADAPTER=module:ClassName registers the named class."""
+    # Register _MinimalAdapter into a synthetic module so importlib can find it.
+    import sys
+    import types
+    fake = types.ModuleType("_oxi_test_minimal_mod")
+    fake.MinimalAdapter = _MinimalAdapter  # type: ignore[attr-defined]
+    sys.modules["_oxi_test_minimal_mod"] = fake
+    try:
+        monkeypatch.setenv("OXI_ADAPTER", "_oxi_test_minimal_mod:MinimalAdapter")
+        load_adapter()
+        adapter = get_active_adapter()
+        assert isinstance(adapter, _MinimalAdapter)
+    finally:
+        del sys.modules["_oxi_test_minimal_mod"]
+
+
+def test_load_adapter_env_var_wins_over_entry_points(monkeypatch):
+    """OXI_ADAPTER takes priority; entry-points are never consulted."""
+    import sys
+    import types
+    fake = types.ModuleType("_oxi_test_env_wins")
+    fake.MinimalAdapter = _MinimalAdapter  # type: ignore[attr-defined]
+    sys.modules["_oxi_test_env_wins"] = fake
+    try:
+        monkeypatch.setenv("OXI_ADAPTER", "_oxi_test_env_wins:MinimalAdapter")
+        # Patch entry_points to return something that would conflict if used.
+        ep = _FakeEntryPoint("would-conflict", "_oxi_test_env_wins:MinimalAdapter", _MinimalAdapter)
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [ep, ep])
+
+        load_adapter()  # must not raise MultipleAdaptersError
+        assert get_active_adapter() is not None
+    finally:
+        del sys.modules["_oxi_test_env_wins"]
+
+
+def test_load_adapter_env_var_bad_spec_raises(monkeypatch):
+    """OXI_ADAPTER without a colon raises AdapterLoadError."""
+    monkeypatch.setenv("OXI_ADAPTER", "oxi_adapter_missing_colon")
+    with pytest.raises(AdapterLoadError, match="not a valid"):
+        load_adapter()
+
+
+def test_load_adapter_env_var_bad_module_raises(monkeypatch):
+    """OXI_ADAPTER pointing at a non-existent module raises AdapterLoadError."""
+    monkeypatch.setenv("OXI_ADAPTER", "oxi_no_such_module_xyz:Foo")
+    with pytest.raises(AdapterLoadError, match="cannot import module"):
+        load_adapter()
+
+
+def test_load_adapter_env_var_bad_class_raises(monkeypatch):
+    """OXI_ADAPTER with a bad class name raises AdapterLoadError."""
+    import sys
+    import types
+    fake = types.ModuleType("_oxi_test_bad_class")
+    sys.modules["_oxi_test_bad_class"] = fake
+    try:
+        monkeypatch.setenv("OXI_ADAPTER", "_oxi_test_bad_class:NoSuchClass")
+        with pytest.raises(AdapterLoadError, match="no attribute"):
+            load_adapter()
+    finally:
+        del sys.modules["_oxi_test_bad_class"]
+
+
+def test_load_adapter_env_var_constructor_error_raises(monkeypatch):
+    """OXI_ADAPTER pointing at a class that needs args raises AdapterLoadError."""
+
+    class _NeedsArgs:
+        def __init__(self, required_arg):
+            pass
+
+    # Patch the module so importlib.import_module finds it.
+    import sys
+    import types
+    fake_mod = types.ModuleType("_fake_needs_args")
+    fake_mod.NeedsArgs = _NeedsArgs  # type: ignore[attr-defined]
+    sys.modules["_fake_needs_args"] = fake_mod
+    try:
+        monkeypatch.setenv("OXI_ADAPTER", "_fake_needs_args:NeedsArgs")
+        with pytest.raises(AdapterLoadError, match="TypeError"):
+            load_adapter()
+    finally:
+        del sys.modules["_fake_needs_args"]
+
+
+def test_load_adapter_single_entry_point(monkeypatch):
+    """With one installed entry-point, load_adapter registers it."""
+    ep = _FakeEntryPoint("test-ep", "oxi_core.tests.test_adapter:_MinimalAdapter", _MinimalAdapter)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [ep])
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    load_adapter()
+    assert isinstance(get_active_adapter(), _MinimalAdapter)
+
+
+def test_load_adapter_multiple_entry_points_raises(monkeypatch):
+    """With more than one entry-point and no env var, raise MultipleAdaptersError."""
+    ep1 = _FakeEntryPoint("adapter-a", "...:A", _MinimalAdapter)
+    ep2 = _FakeEntryPoint("adapter-b", "...:B", _MinimalAdapter)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [ep1, ep2])
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    with pytest.raises(MultipleAdaptersError, match="adapter-a"):
+        load_adapter()
+
+
+def test_load_adapter_no_entry_points_no_env_is_noop(monkeypatch):
+    """No entry-points + no env var → load_adapter returns without registering."""
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    load_adapter()  # must not raise
+    with pytest.raises(AdapterNotRegisteredError):
+        get_active_adapter()
+
+
+def test_load_adapter_entry_point_load_failure_raises(monkeypatch):
+    """If ep.load() raises, AdapterLoadError is surfaced."""
+
+    class _BadEP:
+        name = "bad-ep"
+        value = "broken:Adapter"
+
+        def load(self):
+            raise ImportError("simulated load failure")
+
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [_BadEP()])
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    with pytest.raises(AdapterLoadError, match="simulated load failure"):
+        load_adapter()
+
+
+def test_load_adapter_entry_point_group_name_is_correct(monkeypatch):
+    """load_adapter queries exactly the 'oxi.adapters' group."""
+    seen_groups: list[str] = []
+
+    def _spy(group):
+        seen_groups.append(group)
+        return []
+
+    monkeypatch.setattr(adapter_mod, "entry_points", _spy)
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    load_adapter()
+    assert seen_groups == ["oxi.adapters"]
+
+
+def test_load_adapter_invalid_adapter_from_entry_point_raises(monkeypatch):
+    """If the entry-point class doesn't satisfy the protocol, InvalidAdapterError."""
+    ep = _FakeEntryPoint("broken", "...:_NotAnAdapter", _NotAnAdapter)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [ep])
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    with pytest.raises(InvalidAdapterError):
+        load_adapter()

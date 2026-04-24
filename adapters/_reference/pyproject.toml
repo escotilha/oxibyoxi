@@ -19,6 +19,9 @@ dev = [
   "ruff>=0.5",
 ]
 
+[project.entry-points."oxi.adapters"]
+reference = "oxi_adapter_reference:ReferenceAdapter"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["oxi_adapter_reference*"]

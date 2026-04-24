@@ -15,14 +15,38 @@ This module defines:
 - Dataclasses for structured return values
 - `Adapter` Protocol with 10 methods
 - Module-level registration: register, get, clear
+- Auto-discovery: load_adapter() via entry-points or OXI_ADAPTER env var
 
 No core module imports from outside this file's public surface. The
 `Adapter` protocol is the stable contract; internals may change.
+
+Auto-discovery
+--------------
+Adapter packages declare themselves via a pyproject.toml entry-point:
+
+    [project.entry-points."oxi.adapters"]
+    myproject = "oxi_adapter_myproject:MyAdapter"
+
+`load_adapter()` iterates all installed `oxi.adapters` entry-points and
+calls `register_adapter()` on the first one it finds. If more than one
+is installed a `MultipleAdaptersError` is raised so the operator can
+pin exactly one with the `OXI_ADAPTER` env var:
+
+    OXI_ADAPTER=oxi_adapter_myproject:MyAdapter oxi status
+
+The env var always wins over entry-point discovery and is useful for
+testing or when two adapters coexist in the same virtualenv.
+
+`load_adapter()` is idempotent: if an adapter is already registered it
+returns immediately without touching the entry-points or the env var.
 """
 
 from __future__ import annotations
 
+import importlib
+import os
 from dataclasses import dataclass, field
+from importlib.metadata import entry_points
 from typing import Protocol, runtime_checkable
 
 from . import defaults
@@ -237,3 +261,127 @@ def clear_adapter() -> None:
     """Unset the active adapter. Intended for tests."""
     global _active_adapter
     _active_adapter = None
+
+
+# --- Auto-discovery --------------------------------------------------------
+
+_ENTRY_POINT_GROUP = "oxi.adapters"
+_ENV_VAR = "OXI_ADAPTER"
+
+
+class MultipleAdaptersError(RuntimeError):
+    """Raised when more than one adapter is installed and no env var pins one.
+
+    Pin the desired adapter with::
+
+        OXI_ADAPTER=oxi_adapter_myproject:MyAdapter oxi status
+    """
+
+
+class AdapterLoadError(RuntimeError):
+    """Raised when the OXI_ADAPTER env var or an entry-point cannot be loaded."""
+
+
+def _load_from_env(spec: str) -> Adapter:
+    """Import and instantiate an adapter class from a ``module:ClassName`` spec.
+
+    Raises `AdapterLoadError` on any import/attribute failure.
+    """
+    if ":" not in spec:
+        raise AdapterLoadError(
+            f"{_ENV_VAR}={spec!r} is not a valid 'module:ClassName' spec; "
+            "expected something like 'oxi_adapter_myproject:MyAdapter'"
+        )
+    module_path, class_name = spec.rsplit(":", 1)
+    try:
+        mod = importlib.import_module(module_path)
+    except ModuleNotFoundError as exc:
+        raise AdapterLoadError(
+            f"{_ENV_VAR}: cannot import module {module_path!r}: {exc}"
+        ) from exc
+    try:
+        cls = getattr(mod, class_name)
+    except AttributeError as exc:
+        raise AdapterLoadError(
+            f"{_ENV_VAR}: module {module_path!r} has no attribute {class_name!r}"
+        ) from exc
+    try:
+        return cls()
+    except TypeError as exc:
+        raise AdapterLoadError(
+            f"{_ENV_VAR}: {class_name}() raised TypeError — does it require "
+            f"constructor arguments? ({exc})"
+        ) from exc
+
+
+def load_adapter() -> None:
+    """Auto-discover and register an adapter if none is already active.
+
+    Resolution order (first wins):
+
+    1. **Already registered** — if `get_active_adapter()` succeeds, return
+       immediately. Explicit `register_adapter()` calls always take priority.
+
+    2. **OXI_ADAPTER env var** — ``OXI_ADAPTER=module:ClassName``. The class
+       is imported and instantiated with no arguments, then registered.
+
+    3. **Entry-point discovery** — all packages that declare
+       ``[project.entry-points."oxi.adapters"]`` in their pyproject.toml are
+       collected. Each entry-point value must be a ``module:ClassName`` spec.
+       If exactly one is found it is loaded and registered. If more than one
+       is found a `MultipleAdaptersError` is raised (use ``OXI_ADAPTER`` to
+       disambiguate).
+
+    If no adapter is found by any mechanism this function returns without
+    registering anything; the subsequent `get_active_adapter()` call in
+    ``_require_adapter`` will raise `AdapterNotRegisteredError` with the
+    normal user-facing message.
+
+    Raises:
+        AdapterLoadError: env var or entry-point spec cannot be imported.
+        MultipleAdaptersError: more than one entry-point is installed and
+            ``OXI_ADAPTER`` is not set.
+        InvalidAdapterError: loaded class does not satisfy the Adapter
+            protocol or returns an empty plan_tier.
+    """
+    # 1. Already registered — nothing to do.
+    if _active_adapter is not None:
+        return
+
+    # 2. OXI_ADAPTER env var — explicit override.
+    env_spec = os.environ.get(_ENV_VAR)
+    if env_spec:
+        adapter = _load_from_env(env_spec)
+        register_adapter(adapter)
+        return
+
+    # 3. Entry-point discovery.
+    eps = list(entry_points(group=_ENTRY_POINT_GROUP))
+    if not eps:
+        return  # nothing installed; let _require_adapter emit the friendly error
+
+    if len(eps) > 1:
+        names = ", ".join(ep.name for ep in eps)
+        raise MultipleAdaptersError(
+            f"Multiple oxi adapters are installed ({names}). "
+            f"Pin one with: {_ENV_VAR}=module:ClassName"
+        )
+
+    ep = eps[0]
+    try:
+        cls = ep.load()
+    except Exception as exc:
+        raise AdapterLoadError(
+            f"Failed to load adapter entry-point {ep.name!r} "
+            f"({ep.value!r}): {exc}"
+        ) from exc
+
+    try:
+        adapter = cls()
+    except TypeError as exc:
+        raise AdapterLoadError(
+            f"Adapter class {ep.value!r} raised TypeError on instantiation — "
+            f"does it require constructor arguments? ({exc})"
+        ) from exc
+
+    register_adapter(adapter)

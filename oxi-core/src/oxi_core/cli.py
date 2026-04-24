@@ -33,7 +33,13 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .adapter import AdapterNotRegisteredError, get_active_adapter
+from .adapter import (
+    AdapterLoadError,
+    AdapterNotRegisteredError,
+    MultipleAdaptersError,
+    get_active_adapter,
+    load_adapter,
+)
 from .db import connect
 
 
@@ -42,12 +48,36 @@ def _print_err(message: str) -> None:
 
 
 def _require_adapter() -> None:
+    """Ensure an adapter is active, auto-loading one if possible.
+
+    Resolution order:
+    1. Already registered (explicit ``register_adapter()`` call).
+    2. ``OXI_ADAPTER=module:ClassName`` env var.
+    3. Installed ``oxi.adapters`` entry-points (exactly one must be present).
+
+    Prints a clear error and exits 2 if no adapter can be found or if
+    loading fails.
+    """
+    try:
+        load_adapter()
+    except MultipleAdaptersError as exc:
+        _print_err(
+            f"oxi: multiple adapters installed — pin one with "
+            f"OXI_ADAPTER=module:ClassName.\n  {exc}"
+        )
+        raise SystemExit(2) from exc
+    except AdapterLoadError as exc:
+        _print_err(f"oxi: adapter load failed.\n  {exc}")
+        raise SystemExit(2) from exc
+
     try:
         get_active_adapter()
     except AdapterNotRegisteredError as exc:
         _print_err(
-            "oxi: no adapter registered. Register one before running engine "
-            "commands; see adapters/_reference for an example.\n  " + str(exc)
+            "oxi: no adapter registered. Install an adapter package that "
+            "declares [project.entry-points.\"oxi.adapters\"] in its "
+            "pyproject.toml, or set OXI_ADAPTER=module:ClassName.\n"
+            "  See adapters/_reference for an example.\n  " + str(exc)
         )
         raise SystemExit(2) from exc
 

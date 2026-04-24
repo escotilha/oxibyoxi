@@ -13,6 +13,9 @@ dependencies = [
   "oxi-core>=0.0.0",
 ]
 
+[project.entry-points."oxi.adapters"]
+{{ADAPTER_SLUG}} = "oxi_adapter_{{PACKAGE_SUFFIX}}:Adapter"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["oxi_adapter_{{PACKAGE_SUFFIX}}*"]
