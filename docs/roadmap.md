@@ -20,6 +20,9 @@ _new operators need a single-page walkthrough from pip install to `oxi v3 tick`.
 **T0-2 · rollback runbook for bad alpha releases**
 _document the PyPI yank vs republish decision tree using the 0.1.0a1 to 0.1.0a2 incident as the worked example. Land docs/runbooks/rollback.md._
 
+**T0-11 · worktree_provision drift repair**
+_if the target directory exists but the checked-out branch doesn't match the expected feature branch (main, detached HEAD, or a stale sibling branch), nuke and re-provision rather than failing. Today we surface a WorktreeError and the dispatch dies. Fix: validate HEAD via rev-parse --abbrev-ref, compare to expected, repair if drifted. Add git worktree prune before every add._
+
 ## Tier 1
 
 **T1-3 · oxi v3 status --json flag**
@@ -36,6 +39,15 @@ _click a task row to expand its last 10 ledger events with timestamp and truncat
 
 **T1-7 · oxi v3 kill CLI ergonomics**
 _subcommand that writes/removes the killswitch file with confirmation. Surface state in oxi status header line._
+
+**T1-12 · auto_recover — retry rejected or failed PR dispatches**
+_new oxi_core.v3.auto_recover module. If a PR was rejected by the critic or CI failed hard, after a cooldown window reset the task to planned and re-seed it with a note in the brief. Implementation is oxi-shape (argv subprocess, FakeGitHubClient tests). Dashboard should label recovered tasks so operators can tell a retry from a first-run._
+
+**T1-13 · deep_fix — escalation for repeatedly-stuck tasks**
+_when a task has failed or been rejected N times, escalate model tier (sonnet to opus), loosen constraints on the prompt, or hand off to a dedicated worker session with more context. Adapter-configurable N, cooldown, and escalation recipe. Not about bypassing the critic; about giving the worker a better shot next try._
+
+**T1-14 · ledger_events — typed event-kind constants**
+_new oxi_core.v3.ledger_events with string constants for every event kind emitted across the codebase (dispatch_started, dispatch_succeeded, pr_observed, handoff_written, budget_hard_stop, ...). Migrate call sites to reference the constants. Reduces the string-drift class of bugs and gives the type checker something to hold onto._
 
 ## Tier 2
 
