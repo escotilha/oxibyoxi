@@ -6,6 +6,7 @@ Commands:
     oxi status                  task + event summary (plan tier shown first)
     oxi v3 tick [--times N]     run N dispatch/heartbeat/pr_watcher/auto_merge cycles
     oxi v3 status               alias for `status`
+    oxi v3 plan --dry-run       parse the roadmap and print what was found (no DB write)
     oxi v3 kill [--reason R]    create the killswitch file
     oxi v3 unkill               remove the killswitch file
     oxi brief [--hours N]       print the markdown brief to stdout (or --write)
@@ -308,6 +309,44 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
         )
 
 
+def cmd_plan(args: argparse.Namespace) -> int:
+    """Parse the roadmap and report what was found.  Does NOT touch the DB.
+
+    Designed for ``oxi v3 plan --dry-run``.  Operators writing their first
+    roadmap often produce natural markdown (e.g. ``## T0-1 — title``) that
+    the planner silently ignores.  This command surfaces the format pickiness
+    before any seeding happens.
+
+    Exit codes:
+        0 — parse succeeded and at least one item was found
+        1 — parse error or zero items found
+        2 — missing adapter or missing roadmap file
+    """
+    _require_adapter()
+    adapter = get_active_adapter()
+
+    from .v3.plan_dry_run import dry_run, format_report
+
+    paths = adapter.paths()
+    repo_root = Path(paths.repo_root) if paths.repo_root else Path.cwd()
+    roadmap_path = repo_root / adapter.roadmap_location()
+
+    try:
+        report = dry_run(roadmap_path)
+    except FileNotFoundError as exc:
+        _print_err(
+            f"oxi: roadmap not found at {roadmap_path}\n"
+            "  Check adapter.roadmap_location() and adapter.paths().repo_root."
+        )
+        raise SystemExit(2) from exc
+
+    sys.stdout.write(format_report(report, roadmap_path) + "\n")
+
+    if not report.ok or not report.items:
+        return 1
+    return 0
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Scaffold a new adapter. Does NOT require an active adapter."""
     from .wizard import run as wizard_run
@@ -416,6 +455,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "Off by default.",
     )
     p_v3_tick.set_defaults(func=cmd_tick)
+
+    p_v3_plan = p_v3_sub.add_parser(
+        "plan",
+        help="parse the roadmap and report what was found (no DB write)",
+    )
+    p_v3_plan.add_argument(
+        "--dry-run", action="store_true", required=True,
+        help="required flag — parse roadmap, print items, do not touch the DB",
+    )
+    p_v3_plan.set_defaults(func=cmd_plan)
 
     p_v3_kill = p_v3_sub.add_parser("kill", help="create the killswitch file")
     p_v3_kill.add_argument("--reason", default="", help="reason string")
