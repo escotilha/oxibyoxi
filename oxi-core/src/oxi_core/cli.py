@@ -3,9 +3,9 @@ r"""CLI entrypoint — user-facing surface for the engine.
 Commands:
 
     oxi                         print a banner
-    oxi status                  task + event summary (plan tier shown first)
+    oxi status [--json]         task + event summary (plan tier shown first)
     oxi v3 tick [--times N]     run N dispatch/heartbeat/pr_watcher/auto_merge cycles
-    oxi v3 status               alias for `status`
+    oxi v3 status [--json]      alias for `status`
     oxi v3 plan --dry-run       parse the roadmap and print what was found (no DB write)
     oxi v3 kill [--reason R]    create the killswitch file
     oxi v3 unkill               remove the killswitch file
@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 import sys
 from pathlib import Path
@@ -92,15 +93,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     _require_adapter()
     adapter = get_active_adapter()
 
-    print(f"oxi {__version__}")
-    print(f"  instance:  {adapter.naming().instance_name}")
-    print(f"  plan tier: {adapter.plan_tier()}")
-    print(f"  repo:      {adapter.github_repo()}")
-    print()
-
     handle = connect()
     try:
         conn = handle.connection
+
+        # --json: emit stable machine-readable payload and exit.
+        if getattr(args, "json", False):
+            from .v3.status_json import build as build_status_json
+            payload = build_status_json(conn, adapter)
+            sys.stdout.write(json.dumps(payload, indent=2) + "\n")
+            return 0
+
+        # Human-readable output.
+        print(f"oxi {__version__}")
+        print(f"  instance:  {adapter.naming().instance_name}")
+        print(f"  plan tier: {adapter.plan_tier()}")
+        print(f"  repo:      {adapter.github_repo()}")
+        print()
 
         # Budget first — operators need to see hard-stop before anything else.
         from .v3 import budget as budget_mod
@@ -443,6 +452,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # `oxi status` (top-level alias for v3 status)
     p_status = sub.add_parser("status", help="print task + event summary")
+    p_status.add_argument(
+        "--json", action="store_true",
+        help="emit a stable JSON payload instead of human-readable output "
+             "(schema documented in docs/status-json-schema.md)",
+    )
     p_status.set_defaults(func=cmd_status)
 
     # `oxi brief`
@@ -459,6 +473,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_v3_sub = p_v3.add_subparsers(dest="v3_command")
 
     p_v3_status = p_v3_sub.add_parser("status", help="alias for `oxi status`")
+    p_v3_status.add_argument(
+        "--json", action="store_true",
+        help="emit a stable JSON payload instead of human-readable output "
+             "(schema documented in docs/status-json-schema.md)",
+    )
     p_v3_status.set_defaults(func=cmd_status)
 
     p_v3_tick = p_v3_sub.add_parser("tick", help="run one or more engine cycles")
