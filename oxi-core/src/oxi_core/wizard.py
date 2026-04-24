@@ -141,8 +141,12 @@ def _prompt_bool(
 def collect_answers(input_fn=input) -> WizardAnswers:
     """Interactive prompting. All validation is here.
 
-    Wizard steps (8):
+    Wizard steps (8 + a host probe upfront):
 
+    0. (host probe) — RAM, CPU, plan tier from env. Best-effort; failures
+       are silent. Used to seed defaults for max_concurrent and budget
+       caps so operators on different hardware see different
+       recommendations.
     1. Project name — human-readable label for the instance.
     2. Adapter slug — PyPI-safe package suffix (e.g. "my-project").
     3. GitHub repo — owner/name that this adapter ships PRs to.
@@ -152,8 +156,18 @@ def collect_answers(input_fn=input) -> WizardAnswers:
     7. Budget — per-task and daily caps.
     8. Dispatch policy — max_concurrent + auto_merge toggle.
     """
+    from .compute_probe import probe_and_recommend
+
     print("oxi init — 8-step adapter scaffold")
     print("=" * 40)
+    print()
+
+    # Run the host probe up front so prompts can show calibrated
+    # defaults. Probe failures are silent — defaults still appear,
+    # just from the safe fallback values.
+    _, rec = probe_and_recommend()
+    print("Detected host capacity:")
+    print(rec.rationale)
     print()
 
     project_name = _prompt(
@@ -208,25 +222,25 @@ def collect_answers(input_fn=input) -> WizardAnswers:
     print("\nBudget caps (USD):")
     budget_soft_warn = float(_prompt(
         "  daily soft warn",
-        default="5.0",
+        default=f"{rec.daily_soft_warn_usd}",
         validator=_valid_positive_float,
         input_fn=input_fn,
     ))
     budget_hard_cap = float(_prompt(
         "  daily hard cap",
-        default="20.0",
+        default=f"{rec.daily_hard_cap_usd}",
         validator=_valid_positive_float,
         input_fn=input_fn,
     ))
     budget_per_task_opus = float(_prompt(
         "  per-task Opus cap",
-        default="2.0",
+        default=f"{rec.per_task_opus_usd}",
         validator=_valid_positive_float,
         input_fn=input_fn,
     ))
     budget_per_task_sonnet = float(_prompt(
         "  per-task Sonnet cap",
-        default="0.50",
+        default=f"{rec.per_task_sonnet_usd}",
         validator=_valid_positive_float,
         input_fn=input_fn,
     ))
@@ -234,7 +248,7 @@ def collect_answers(input_fn=input) -> WizardAnswers:
     print("\nDispatch:")
     max_concurrent = int(_prompt(
         "  max concurrent dispatches",
-        default="3",
+        default=f"{rec.max_concurrent}",
         validator=_valid_positive_int,
         input_fn=input_fn,
     ))
