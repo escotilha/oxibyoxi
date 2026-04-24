@@ -10,6 +10,9 @@ oxi v3 tick --real-claude     dispatch + critic (spends budget)
 oxi v3 plan --dry-run         parse roadmap, print items, no DB write
 oxi v3 kill [--reason R]      set the killswitch (pauses dispatch)
 oxi v3 unkill                 clear the killswitch (resumes dispatch)
+oxi v3 heal                   clear engine-unhealthy state, resume dispatch
+oxi v3 observe                list pending auto-observation proposals
+oxi v3 observe accept <id>    queue a proposal as a planned task
 oxi brief [--hours N]         print markdown recap to stdout
 oxi brief --write             write recap to adapter.paths().brief_path
 oxi dashboard                 start localhost HTML dashboard

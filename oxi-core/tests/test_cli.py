@@ -597,3 +597,85 @@ def test_require_adapter_bad_env_var_exits_2(monkeypatch, capsys):
     assert exc.value.code == 2
     err = capsys.readouterr().err
     assert "adapter load failed" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# v3 observe — list/accept proposals
+# ---------------------------------------------------------------------------
+
+
+def _seed_proposal(conn, *, signal_kind: str, target: str, title: str,
+                   subtitle: str = "", count: int = 3) -> int:
+    """Insert an observe_proposal event, return its event id."""
+    import json as _json
+    payload = {
+        "signal_kind": signal_kind,
+        "target_identifier": target,
+        "title": title,
+        "subtitle": subtitle,
+        "count": count,
+        "window_hours": 24,
+    }
+    cur = conn.execute(
+        "INSERT INTO event (task_id, kind, payload) VALUES (NULL, ?, ?)",
+        ("observe_proposal", _json.dumps(payload)),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def test_observe_list_with_no_proposals(_env, capsys):
+    rc = main(["v3", "observe"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no pending observation proposals" in out
+
+
+def test_observe_list_shows_pending_proposals(_env, capsys):
+    pid = _seed_proposal(
+        _env["conn"],
+        signal_kind="dispatch_failure",
+        target="T1-7",
+        title="dispatch failures clustering on T1-7 — investigate",
+        subtitle="3 failures in last 24h on the same task",
+    )
+    rc = main(["v3", "observe"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"#{pid}" in out
+    assert "dispatch_failure" in out
+    assert "T1-7" in out
+    assert "investigate" in out
+    assert "Accept one with: oxi v3 observe accept" in out
+
+
+def test_observe_accept_injects_front(_env, capsys):
+    pid = _seed_proposal(
+        _env["conn"],
+        signal_kind="critic_rejection",
+        target="T2-9",
+        title="critic rejected T2-9 three times — review prompt",
+    )
+    rc = main(["v3", "observe", "accept", str(pid)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert f"accepted proposal #{pid}" in out
+
+    # Verify accept event landed.
+    accepted = _env["conn"].execute(
+        "SELECT COUNT(*) FROM event WHERE kind = 'observe_accepted'"
+    ).fetchone()[0]
+    assert accepted == 1
+
+    # Verify front row injected.
+    front = _env["conn"].execute(
+        "SELECT COUNT(*) FROM front WHERE title LIKE 'critic rejected T2-9%'"
+    ).fetchone()[0]
+    assert front == 1
+
+
+def test_observe_accept_unknown_id_returns_1(_env, capsys):
+    rc = main(["v3", "observe", "accept", "9999"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "not found" in out

@@ -10,6 +10,8 @@ Commands:
     oxi v3 kill [--reason R] [-y]   create the killswitch file (prompts unless -y)
     oxi v3 unkill [-y]              remove the killswitch file (prompts unless -y)
     oxi v3 heal                     reset engine-unhealthy state after consecutive failures
+    oxi v3 observe                  list pending auto-observation proposals
+    oxi v3 observe accept <id>      queue a proposal for dispatch (closes self-improvement loop)
     oxi brief [--hours N]       print the markdown brief to stdout (or --write)
     oxi dashboard [--port]      start the localhost HTML dashboard
 
@@ -275,6 +277,68 @@ def cmd_unkill(args: argparse.Namespace) -> int:
     kill_mod.remove(ks_path)
     print(f"oxi: killswitch cleared at {ks_path}")
     return 0
+
+
+def cmd_observe(args: argparse.Namespace) -> int:
+    """List or accept auto-observation proposals.
+
+    The auto_observe subsystem watches the ledger for repeated patterns
+    (dispatch failures, critic rejections, worktree drift) and emits
+    proposed roadmap items when a pattern crosses threshold. Operators
+    review proposals here.
+
+    Subcommands:
+      oxi v3 observe                  list all pending proposals
+      oxi v3 observe accept <id>      accept a proposal — injects a
+                                      front row so the next tick's
+                                      seed_from_roadmap promotes it to
+                                      a planned task. The engine then
+                                      dispatches against it on the
+                                      following --real-claude tick.
+                                      This closes the auto-improvement
+                                      loop: engine observes → operator
+                                      approves → engine fixes itself.
+    """
+    _require_adapter()
+    from .v3 import auto_observe
+
+    handle = connect()
+    try:
+        conn = handle.connection
+        if args.observe_action == "accept":
+            ok = auto_observe.accept(conn, args.proposal_id)
+            if ok:
+                print(
+                    f"oxi: accepted proposal #{args.proposal_id}. "
+                    "Next reconciliation tick will seed it as a planned task."
+                )
+                return 0
+            print(
+                f"oxi: proposal #{args.proposal_id} not found "
+                "or already accepted."
+            )
+            return 1
+
+        # Default action: list.
+        proposals = auto_observe.list_proposals(conn)
+        if not proposals:
+            print("oxi: no pending observation proposals.")
+            return 0
+        print(f"oxi: {len(proposals)} pending proposal(s):")
+        print()
+        for p in proposals:
+            ts = p.created_at.split(".")[0] if "." in p.created_at else p.created_at
+            print(f"  #{p.event_id}  [{p.signal_kind}]  observed×{p.count}")
+            print(f"    target  : {p.target_identifier}")
+            print(f"    title   : {p.title}")
+            if p.subtitle:
+                print(f"    subtitle: {p.subtitle}")
+            print(f"    seen at : {ts}")
+            print()
+        print("Accept one with: oxi v3 observe accept <id>")
+        return 0
+    finally:
+        handle.connection.close()
 
 
 def cmd_heal(args: argparse.Namespace) -> int:  # noqa: ARG001
@@ -701,6 +765,29 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_v3_heal.set_defaults(func=cmd_heal)
+
+    # `oxi v3 observe` — list/accept auto-observation proposals
+    p_v3_observe = p_v3_sub.add_parser(
+        "observe",
+        help=(
+            "list pending auto-observation proposals; accept one to "
+            "queue it for dispatch"
+        ),
+    )
+    p_v3_observe_sub = p_v3_observe.add_subparsers(
+        dest="observe_action",
+    )
+    p_v3_observe_accept = p_v3_observe_sub.add_parser(
+        "accept",
+        help="accept a proposal by event id (closes the auto-improvement loop)",
+    )
+    p_v3_observe_accept.add_argument(
+        "proposal_id",
+        type=int,
+        help="event id of the observe_proposal row to accept",
+    )
+    p_v3_observe.set_defaults(func=cmd_observe, observe_action=None)
+    p_v3_observe_accept.set_defaults(func=cmd_observe)
 
     # `oxi dashboard`
     p_dashboard = sub.add_parser("dashboard", help="start the localhost HTML dashboard")
