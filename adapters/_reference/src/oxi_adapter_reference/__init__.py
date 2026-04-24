@@ -8,7 +8,13 @@ when the package is pulled in as a transitive dependency.
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError, version
+
 from .adapter import ReferenceAdapter
 
-__version__ = "0.0.0"
+try:
+    __version__ = version("oxi-adapter-reference")
+except PackageNotFoundError:
+    __version__ = "0.0.0+unknown"
+
 __all__ = ["ReferenceAdapter", "__version__"]
