@@ -59,11 +59,18 @@ def test_pr_number_column_exists_after_migration(tmp_path: Path):
 
 
 def test_migration_v2_is_recorded(tmp_path: Path):
+    """The v2 migration is present in MIGRATIONS and applied on connect.
+
+    (The schema version is whichever is highest in MIGRATIONS — test
+    against the list, not a hardcoded number, so this test survives
+    future migrations.)
+    """
     register_adapter(_Adapter(db_path_value=str(tmp_path / "oxi.db")))
     handle = db.connect()
     try:
         version = db.current_schema_version(handle.connection)
-        assert version == 2
+        assert version == max(v for v, _ in db.MIGRATIONS)
+        assert 2 in {v for v, _ in db.MIGRATIONS}
     finally:
         handle.connection.close()
 
@@ -174,6 +181,10 @@ def test_v1_only_db_can_be_upgraded_to_v2(tmp_path: Path):
             for row in handle.connection.execute("PRAGMA table_info(task)")
         }
         assert "pr_number" in cols_v2
-        assert db.current_schema_version(handle.connection) == 2
+        # All pending migrations apply on reconnect, so the version
+        # advances to whichever is highest in MIGRATIONS.
+        assert db.current_schema_version(handle.connection) == max(
+            v for v, _ in db.MIGRATIONS
+        )
     finally:
         handle.connection.close()
