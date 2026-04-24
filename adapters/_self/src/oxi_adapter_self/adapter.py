@@ -80,11 +80,19 @@ class SelfAdapter:
     # ---- Dispatch ----
 
     def dispatch_hosts(self) -> tuple[DispatchHost, ...]:
+        # Bumped from 1 → 3 for the polish-sprint phase. Three parallel
+        # claude sessions fit comfortably within the Mac Mini's memory
+        # envelope (each worker is ~1-2 GB resident), stay under plan
+        # rate limits, and give the reviewer a manageable per-hour
+        # merge load. Goal of 10 deferred to T3-2 (onboarding compute
+        # probe) — bump by hand in staged increments while we watch
+        # the dispatcher for contention and the critic for quality
+        # regression.
         return (
             DispatchHost(
                 name="local",
                 ssh_alias=None,
-                max_concurrent=1,
+                max_concurrent=3,
                 worktree_root=str(self.repo_root / ".oxi" / "worktrees"),
             ),
         )

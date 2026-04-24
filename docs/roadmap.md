@@ -84,6 +84,29 @@ _add pytest-timeout to dev deps; default 30s per-test, 180s on @pytest.mark.slow
 **T2-11 · auto-observation: engine reads its own ledger and proposes roadmap items**
 _the engine already auto-writes fixes via dogfood dispatch, but it doesn't yet auto-identify what to fix. New oxi_core.v3.auto_observe module watches the ledger for signals: repeated dispatch failures on the same code path, critic-rejection patterns, worktree-drift events clustering on specific tasks. Emits a proposed roadmap entry when a pattern crosses threshold (e.g. 3 occurrences in 48h). Operator reviews + accepts via `oxi v3 observe --accept <id>`. Closes the self-improvement loop: engine doesn't just fix its own bugs, it notices them._
 
+**T2-12 · mypy strict typing pass**
+_add mypy to dev deps + CI job. Start with oxi-core/src/oxi_core/v3/ (the engine core), then expand. strict=True aspirationally; disable_error_code list for acknowledged gaps. Catches a class of bugs tests miss — silent None returns, wrong Protocol conformance, dataclass field types._
+
+**T2-13 · coverage gate: 80% on new code**
+_add coverage.py + pytest-cov to CI. Fail the build if a PR introduces new lines under 80% coverage. Keeps the engine from writing untested code via dogfood. Uses codecov.io or CI-local gate._
+
+**T2-14 · nightly integration test against real GitHub**
+_new CI schedule that runs once a day against a dedicated sandbox repo, exercising: oxi init, pip install, real dispatch (no --real-claude, just the GitHub calls via GhCliClient), real PR open/merge/watch. Catches GitHub API drift + gh CLI breakage. Alerts operator on failure but doesn't block PRs._
+
+**T2-15 · benchmark regression guard**
+_record dispatch latency, DB query p50/p95, dashboard render time on every main commit. Publish to a JSON file in the repo + flag regressions > 20%. Prevents slow creep._
+
+**T2-16 · doc lint (lychee + markdownlint)**
+_CI job that checks docs/ for broken internal + external links, markdown style consistency. Protects the manual from rot as the codebase evolves underneath it._
+
+## Tier 3 (long-horizon)
+
+**T3-1 · product-spec-to-roadmap ingester**
+_accept a product spec (markdown, PDF, or plain text) and emit a properly-formatted docs/roadmap.md. Uses Claude to parse the spec into tier-assigned items with identifiers. Human reviews before seeding. Key design constraint: must pass scripts/lint-for-leaks.sh — AI-generated identifiers can't leak project-specific strings. Enables non-coders to onboard onto oxi with a spec, not a roadmap._
+
+**T3-2 · compute-aware onboarding probe**
+_during `oxi init`, probe the host: total RAM (`sysctl hw.memsize`), CPU cores (`nproc`), plan tier (via `claude --version`/ANTHROPIC_API_KEY metadata), free disk. Recommend a `max_concurrent` + `daily_hard_cap` appropriate to the machine. Safe default caps (1, $5) if probe fails. Makes the first-run experience self-tuning instead of asking the operator to guess._
+
 ---
 
 ## Done (moved to release notes)
