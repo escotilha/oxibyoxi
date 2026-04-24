@@ -120,16 +120,21 @@ if [[ "${GENERATE_SBOM}" == "yes" ]]; then
   # in the SBOM identical to what end-users get from `pip install`.
   "${SMOKE_VENV}/bin/pip" install --quiet cyclonedx-bom
 
-  SBOM_PATH="$(
+  # generate-sbom.sh prints status lines plus the SBOM path on the last
+  # line. Capture the whole output, then take only the last non-empty
+  # line — that's the path. (Earlier capture-the-whole-blob behavior made
+  # the existence check spuriously fail.)
+  SBOM_OUTPUT="$(
     "${REPO_ROOT}/scripts/generate-sbom.sh" \
       "${PACKAGE_PATH}" \
       "${SMOKE_VENV}/bin/python" \
       "dist/"
   )"
-  # generate-sbom.sh echoes the path on the last line; capture it.
-  # If the last line isn't a file, treat it as an error.
+  SBOM_PATH="$(echo "${SBOM_OUTPUT}" | tail -n 1)"
   if [[ ! -f "${SBOM_PATH}" ]]; then
     echo "release: SBOM generation failed — dist/ may be incomplete" >&2
+    echo "  generator output:" >&2
+    echo "${SBOM_OUTPUT}" | sed 's/^/    /' >&2
     rm -rf "${SMOKE_VENV_PARENT}"
     exit 1
   fi
