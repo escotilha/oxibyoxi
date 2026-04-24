@@ -69,6 +69,23 @@ def cmd_status(args: argparse.Namespace) -> int:
     handle = connect()
     try:
         conn = handle.connection
+
+        # Budget first — operators need to see hard-stop before anything else.
+        from .v3 import budget as budget_mod
+        status = budget_mod.check(conn)
+        marker = {
+            budget_mod.Verdict.OK: "  ",
+            budget_mod.Verdict.WARN: "⚠ ",
+            budget_mod.Verdict.HARD_STOP: "✗ ",
+        }[status.verdict]
+        print(
+            f"{marker}budget (today): "
+            f"${status.today_spend_usd:.2f} spent / "
+            f"${status.daily_soft_warn_usd:.2f} warn / "
+            f"${status.daily_hard_cap_usd:.2f} hard — {status.verdict.value}"
+        )
+        print()
+
         # Status histogram.
         counts = {
             row["status"]: row["n"]
@@ -78,8 +95,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         }
         print("task counts by status:")
         if counts:
-            for status in sorted(counts):
-                print(f"  {status:<12} {counts[status]}")
+            for status_name in sorted(counts):
+                print(f"  {status_name:<12} {counts[status_name]}")
         else:
             print("  (no tasks)")
 
