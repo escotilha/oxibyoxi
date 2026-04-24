@@ -192,6 +192,13 @@ def run(
         logger.info("auto_merge: adapter.policy().auto_merge is False; skipping")
         return empty
 
+    # Budget gate — each critic invocation spends money. Refuse to start
+    # a pass if the hard cap is hit; let heartbeat continue reaping.
+    from . import budget as budget_mod
+    if budget_mod.is_hard_stopped(conn):
+        logger.info("auto_merge: budget hard-stop reached, skipping pass")
+        return empty
+
     if client is None:
         client = GhCliClient()
     if repo is None:

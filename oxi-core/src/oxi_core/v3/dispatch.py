@@ -284,6 +284,12 @@ async def dispatch_one(
         logger.info("dispatch: engine stopping, skipping tick")
         return None
 
+    # Budget gate — refuse to spend more if the hard cap is hit.
+    from . import budget as budget_mod
+    if budget_mod.is_hard_stopped(conn):
+        logger.info("dispatch: budget hard-stop reached, skipping tick")
+        return None
+
     tasks = _pick_next_planned(conn, limit=1)
     if not tasks:
         return None
