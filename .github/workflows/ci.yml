@@ -68,22 +68,32 @@ jobs:
         uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
         with:
           python-version: ${{ matrix.python-version }}
-      - name: Install oxi-core + reference adapter (editable) + dev deps
+      - name: Install oxi-core + adapters (editable) + dev deps
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation in this run: block.
+        #   - Installs static path targets only; no dynamic input.
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e "./oxi-core[dev]"
           python -m pip install -e "./adapters/_reference[dev]"
+          python -m pip install -e "./adapters/_self[dev]"
       - name: Ruff (oxi-core)
         working-directory: oxi-core
         run: ruff check .
       - name: Ruff (reference adapter)
         working-directory: adapters/_reference
         run: ruff check .
+      - name: Ruff (self adapter)
+        working-directory: adapters/_self
+        run: ruff check .
       - name: Pytest (oxi-core)
         working-directory: oxi-core
         run: pytest -q
       - name: Pytest (reference adapter)
         working-directory: adapters/_reference
+        run: pytest -q
+      - name: Pytest (self adapter)
+        working-directory: adapters/_self
         run: pytest -q
 
   pip-audit:
