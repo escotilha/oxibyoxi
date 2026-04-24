@@ -212,6 +212,7 @@ def cmd_tick(args: argparse.Namespace) -> int:
     _require_adapter()
     adapter = get_active_adapter()
     from .v3 import kill as kill_mod
+    from .v3._color import green, red, yellow
     from .v3.engine_state import EngineState
 
     state = EngineState(
@@ -249,28 +250,46 @@ def cmd_tick(args: argparse.Namespace) -> int:
             report = heartbeat.reap(handle.connection, state)
             total_abandoned += report.abandoned
             if report.abandoned or report.considered:
-                print(
+                heartbeat_line = (
                     f"  heartbeat: considered={report.considered} "
                     f"abandoned={report.abandoned} "
                     f"protected_by_pr={report.protected_by_pr} "
                     f"fresh={report.skipped_fresh}"
                 )
+                # Yellow when tasks were abandoned (stuck); plain otherwise.
+                if report.abandoned:
+                    heartbeat_line = yellow(heartbeat_line)
+                print(heartbeat_line)
 
             rec_report = auto_recover.run(handle.connection, state)
             total_recovered += rec_report.recovered
             if rec_report.recovered or rec_report.exhausted:
-                print(
+                recover_line = (
                     f"  auto_recover: recovered={rec_report.recovered} "
                     f"exhausted={rec_report.exhausted} "
                     f"skipped_cooldown={rec_report.skipped_cooldown}"
                 )
+                # Red when all retries are exhausted; green when recovered.
+                if rec_report.exhausted:
+                    recover_line = red(recover_line)
+                else:
+                    recover_line = green(recover_line)
+                print(recover_line)
 
             if args.real_claude:
                 _run_real_claude_tick(handle.connection, state, adapter)
-        print(
+
+        summary = (
             f"oxi: tick done. abandoned={total_abandoned} "
             f"auto_recovered={total_recovered}"
         )
+        # Color the summary line: red if anything was abandoned, green if
+        # recoveries happened with no abandonments, plain otherwise.
+        if total_abandoned:
+            summary = yellow(summary)
+        elif total_recovered:
+            summary = green(summary)
+        print(summary)
     finally:
         handle.connection.close()
     return 0
@@ -286,7 +305,9 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
     import asyncio
 
     from .v3 import auto_merge, dispatch, pr_watcher
+    from .v3._color import green, red, yellow
     from .v3.critic import ClaudeCriticBackend
+    from .v3.dispatch_invoke import Classification
 
     repo_root_str = adapter.paths().repo_root or "."
     repo_root = Path(repo_root_str)
@@ -307,29 +328,54 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
         )
     )
     if result is not None:
-        print(
+        dispatch_line = (
             f"  dispatch: classification={result.classification.value} "
             f"cost=${result.cost_usd:.4f}"
         )
+        # Green on success, red on failure/timeout, yellow on transient.
+        if result.classification == Classification.SUCCESS:
+            dispatch_line = green(dispatch_line)
+        elif result.classification == Classification.RETRYABLE_TRANSIENT:
+            dispatch_line = yellow(dispatch_line)
+        else:
+            # FAILED or TIMEOUT
+            dispatch_line = red(dispatch_line)
+        print(dispatch_line)
 
     watch_report = pr_watcher.watch(conn, state)
     if (watch_report.pr_numbers_stamped
             or watch_report.tasks_transitioned_merged
             or watch_report.tasks_transitioned_failed):
-        print(
+        watch_line = (
             f"  pr_watcher: stamped={watch_report.pr_numbers_stamped} "
             f"merged={watch_report.tasks_transitioned_merged} "
             f"failed={watch_report.tasks_transitioned_failed}"
         )
+        # Red when PRs failed; green when merged; yellow otherwise (stamped open).
+        if watch_report.tasks_transitioned_failed:
+            watch_line = red(watch_line)
+        elif watch_report.tasks_transitioned_merged:
+            watch_line = green(watch_line)
+        else:
+            watch_line = yellow(watch_line)
+        print(watch_line)
 
     critic = ClaudeCriticBackend(cwd=repo_root)
     merge_report = auto_merge.run(conn, state, critic)
     if merge_report.considered:
-        print(
+        merge_line = (
             f"  auto_merge: considered={merge_report.considered} "
             f"merged={merge_report.merged} "
             f"rejected={merge_report.critic_rejected}"
         )
+        # Red when critic rejected; green when merged; yellow if only considered.
+        if merge_report.critic_rejected:
+            merge_line = red(merge_line)
+        elif merge_report.merged:
+            merge_line = green(merge_line)
+        else:
+            merge_line = yellow(merge_line)
+        print(merge_line)
 
 
 def cmd_plan(args: argparse.Namespace) -> int:

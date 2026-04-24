@@ -244,6 +244,63 @@ def test_tick_runs_heartbeat_without_crashing(_env, capsys):
     assert "tick done" in out.lower()
 
 
+def test_tick_output_stable_with_no_color(_env, monkeypatch, capsys):
+    """NO_COLOR=1 must not change the text content of tick output.
+
+    The *text* the operator sees ("tick done", counts, …) must be
+    identical whether NO_COLOR is set or not. ANSI codes must be absent.
+    """
+    monkeypatch.setenv("NO_COLOR", "1")
+    rc = main(["v3", "tick", "--times", "1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # No escape codes present.
+    assert "\033[" not in out
+    # Stable text landmarks still present.
+    assert "tick done" in out.lower()
+    assert "abandoned=" in out
+    assert "auto_recovered=" in out
+
+
+def test_tick_output_no_escape_codes_on_non_tty(_env, monkeypatch, capsys):
+    """pytest captures stdout as a non-TTY, so no escape codes should appear."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    rc = main(["v3", "tick", "--times", "1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "\033[" not in out
+    assert "tick done" in out.lower()
+
+
+def test_tick_heartbeat_abandon_line_contains_counts(_env, monkeypatch, capsys):
+    """When a task is abandoned by heartbeat, the line contains the counts.
+
+    The color wrapping must not corrupt the numeric content; this test
+    verifies the text is stable in NO_COLOR mode.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    monkeypatch.setenv("NO_COLOR", "1")
+
+    # Insert a stale dispatched task (no PR, last_progress_at in the past).
+    stale_ts = (datetime.now(tz=UTC) - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M:%S")
+    _env["conn"].execute(
+        "INSERT INTO task (identifier, tier, title, status, last_progress_at, updated_at) "
+        "VALUES ('T0-99', 0, 'stale task', 'dispatched', ?, ?)",
+        (stale_ts, stale_ts),
+    )
+    _env["conn"].commit()
+
+    rc = main(["v3", "tick", "--times", "1"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    # The heartbeat line must appear with correct counts.
+    assert "heartbeat:" in out
+    assert "abandoned=1" in out
+    # No escape codes in NO_COLOR mode.
+    assert "\033[" not in out
+
+
 # ---------------------------------------------------------------------------
 # ANTHROPIC_API_KEY plumbing
 # ---------------------------------------------------------------------------
