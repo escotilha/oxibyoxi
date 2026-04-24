@@ -3,28 +3,22 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "oxi-adapter-reference"
-version = "0.1.0a4"
-description = "Reference adapter for oxi. Drives the throwaway sample-project fixture."
+name = "oxi-adapter-{{ADAPTER_SLUG}}"
+version = "0.0.1"
+description = "oxi adapter for {{PROJECT_NAME}}."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.11"
 dependencies = [
-  "oxi-core==0.1.0a4",
-]
-
-[project.optional-dependencies]
-dev = [
-  "pytest>=7",
-  "ruff>=0.5",
+  "oxi-core>=0.0.0",
 ]
 
 [project.entry-points."oxi.adapters"]
-reference = "oxi_adapter_reference:ReferenceAdapter"
+{{ADAPTER_SLUG}} = "oxi_adapter_{{PACKAGE_SUFFIX}}:Adapter"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["oxi_adapter_reference*"]
+include = ["oxi_adapter_{{PACKAGE_SUFFIX}}*"]
 
 [tool.ruff]
 line-length = 100

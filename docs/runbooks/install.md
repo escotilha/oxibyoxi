@@ -25,14 +25,14 @@ grabs the `0.0.0` name-reservation stub instead of the working alpha.
 ```bash
 pip install --pre oxi-core
 # or pin explicitly:
-pip install oxi-core==0.1.0a3
+pip install oxi-core==0.1.0a4
 ```
 
 Verify:
 
 ```bash
 oxi --version
-# oxi 0.1.0a3
+# oxi 0.1.0a4
 ```
 
 If `oxi` is not found after install, your pip's `bin/` directory is not on `PATH`. Find it with `pip show -f oxi-core | grep Scripts` (Windows) or `python -m site --user-base` (macOS/Linux) and add `<base>/bin` to `PATH`.
@@ -112,7 +112,7 @@ oxi status
 Expected output (values match what you entered in the wizard):
 
 ```
-oxi 0.1.0a2
+oxi 0.1.0a4
   instance:  My App
   plan tier: standard
   repo:      acme/my-app

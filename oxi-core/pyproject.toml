@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxi-core"
-version = "0.1.0a3"
+version = "0.1.0a4"
 description = "Standalone, forkable autonomous coding orchestrator."
 readme = "README.md"
 license = { text = "MIT" }
@@ -43,7 +43,7 @@ where = ["src"]
 include = ["oxi_core*"]
 
 [tool.setuptools.package-data]
-"oxi_core" = ["skills/_bundled/**/*"]
+"oxi_core" = ["skills/_bundled/**/*", "templates/**/*"]
 
 [tool.ruff]
 line-length = 100

@@ -344,14 +344,26 @@ def scaffold(
 
 
 def default_template_root() -> Path:
-    """Locate the template directory relative to this package.
+    """Locate the template directory shipped with the package.
 
-    Installed via pip: the template directory is packaged alongside
-    `oxi_core`. Editable install: adapters/_template is one level up
-    from the source tree.
+    The template lives under ``oxi_core/templates/adapter/`` and is
+    included in the wheel as package-data. Works identically for
+    editable installs (source tree) and pip-installed wheels
+    (site-packages).
+
+    Falls back to the repo-root ``adapters/_template/`` for legacy
+    checkouts that predate the move; remove after a few releases.
     """
+    # Primary: packaged template — works in both editable and
+    # pip-installed modes because it lives inside the oxi_core
+    # package tree.
+    packaged = Path(__file__).resolve().parent / "templates" / "adapter"
+    if packaged.is_dir():
+        return packaged
+
+    # Legacy fallback: older checkouts still have the template at
+    # repo_root/adapters/_template/. Walk up from this file.
     here = Path(__file__).resolve().parent
-    # oxi-core/src/oxi_core/wizard.py → oxi-core/src → oxi-core → repo root
     for candidate in (
         here.parent.parent / "adapters" / "_template",
         here.parent.parent.parent / "adapters" / "_template",
@@ -359,9 +371,11 @@ def default_template_root() -> Path:
     ):
         if candidate.is_dir():
             return candidate
+
     raise FileNotFoundError(
-        "adapters/_template not found. If installed from PyPI this is a "
-        "packaging bug; please open an issue."
+        "adapter template not found. Expected either "
+        "oxi_core/templates/adapter/ (packaged) or "
+        "adapters/_template/ (legacy source checkout)."
     )
 
 
