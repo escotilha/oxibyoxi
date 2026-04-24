@@ -58,3 +58,6 @@ select = ["E", "F", "W", "I", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "slow: end-to-end / integration tests; opt out via `-m 'not slow'`",
+]
