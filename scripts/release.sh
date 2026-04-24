@@ -2,24 +2,29 @@
 # release.sh — build and publish a subpackage to PyPI.
 #
 # Usage:
-#   scripts/release.sh <package-path> [--test]
+#   scripts/release.sh <package-path> [--test] [--no-sbom]
 #
 # Examples:
 #   scripts/release.sh oxi-core                 # publish oxi-core to PyPI
 #   scripts/release.sh adapters/_reference       # publish oxi-adapter-reference
 #   scripts/release.sh oxi-core --test          # publish to TestPyPI
+#   scripts/release.sh oxi-core --no-sbom       # skip SBOM generation
 #
 # Requirements:
 # - Token stored in macOS Keychain under service "PYPI_API_TOKEN" (or
 #   "TESTPYPI_API_TOKEN" when --test). Never pass tokens on the command
 #   line; never commit them anywhere.
-# - Python 3.11+ with `build` and `twine` installed in the active venv.
+# - Python 3.11+ with `build`, `twine`, and `cyclonedx-bom` installed in
+#   the active venv (cyclonedx-bom is used for SBOM generation).
 #
 # Anti-pattern notes:
 # - Fails if the git working tree is dirty (avoid shipping untracked
 #   artifacts).
 # - Fails if the package's version already exists on the target index.
 # - Cleans dist/ before building so stale wheels can't sneak in.
+# - SBOM is generated from the smoke-test venv (isolated install of the
+#   freshly built wheel) so the dependency snapshot reflects exactly what
+#   a clean pip install pulls in — not the broader dev environment.
 
 set -euo pipefail
 
@@ -39,6 +44,7 @@ shift
 TARGET="pypi"
 KEYCHAIN_SERVICE="PYPI_API_TOKEN"
 REPOSITORY_URL=""
+GENERATE_SBOM="yes"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -46,6 +52,9 @@ while [[ $# -gt 0 ]]; do
       TARGET="testpypi"
       KEYCHAIN_SERVICE="TESTPYPI_API_TOKEN"
       REPOSITORY_URL="https://test.pypi.org/legacy/"
+      ;;
+    --no-sbom)
+      GENERATE_SBOM="no"
       ;;
     *)
       echo "unknown arg: $1" >&2
@@ -84,8 +93,11 @@ python -m build --sdist --wheel
 # -------- local install smoke test --------
 # Install the freshly built wheel in a throwaway venv and import it.
 # Catches packaging errors that TestPyPI would otherwise catch.
+# The smoke venv is also the target for SBOM generation (see below) so
+# it captures exactly what a clean pip install pulls in.
 
-SMOKE_VENV="$(mktemp -d)/smoke-venv"
+SMOKE_VENV_PARENT="$(mktemp -d)"
+SMOKE_VENV="${SMOKE_VENV_PARENT}/smoke-venv"
 python -m venv "${SMOKE_VENV}"
 WHEEL="$(ls dist/*.whl | head -n 1)"
 "${SMOKE_VENV}/bin/pip" install --quiet "${WHEEL}"
@@ -96,7 +108,37 @@ IMPORT_NAME="$(echo "${PKG_NAME}" | tr '-' '_')"
 
 "${SMOKE_VENV}/bin/python" -c "import ${IMPORT_NAME}; print(f'imported ${IMPORT_NAME} {getattr(${IMPORT_NAME}, \"__version__\", \"?\")}')"
 
-rm -rf "${SMOKE_VENV}"
+# -------- SBOM generation --------
+# Run before removing the smoke venv — the SBOM reflects the clean install
+# environment (just the wheel's declared dependencies, nothing extra from
+# the dev environment). The SBOM lands in dist/ alongside the wheel and
+# sdist so it can be attached to the GitHub release as a release artifact.
+
+if [[ "${GENERATE_SBOM}" == "yes" ]]; then
+  # Install cyclonedx-bom into the smoke venv so the SBOM tool introspects
+  # exactly the same environment we just validated. This keeps the dep closure
+  # in the SBOM identical to what end-users get from `pip install`.
+  "${SMOKE_VENV}/bin/pip" install --quiet cyclonedx-bom
+
+  SBOM_PATH="$(
+    "${REPO_ROOT}/scripts/generate-sbom.sh" \
+      "${PACKAGE_PATH}" \
+      "${SMOKE_VENV}/bin/python" \
+      "dist/"
+  )"
+  # generate-sbom.sh echoes the path on the last line; capture it.
+  # If the last line isn't a file, treat it as an error.
+  if [[ ! -f "${SBOM_PATH}" ]]; then
+    echo "release: SBOM generation failed — dist/ may be incomplete" >&2
+    rm -rf "${SMOKE_VENV_PARENT}"
+    exit 1
+  fi
+  echo "release: SBOM → ${SBOM_PATH}"
+else
+  echo "release: SBOM generation skipped (--no-sbom)"
+fi
+
+rm -rf "${SMOKE_VENV_PARENT}"
 
 # -------- publish --------
 

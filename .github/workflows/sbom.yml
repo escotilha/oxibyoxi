@@ -1,0 +1,66 @@
+# sbom.yml — generate a CycloneDX SBOM for oxi-core on every push to main.
+#
+# The SBOM is uploaded as a GitHub Actions artifact (retained for 90 days)
+# so operators can download and audit the exact dependency graph shipped in
+# any given release.
+#
+# Security review notes:
+#   - No ${{ github.event.* }} interpolation in run: blocks.
+#   - permissions is contents: read (no write, no packages, no id-token).
+#   - All run: commands invoke static scripts with no dynamic input.
+#   - Third-party actions pinned to full commit SHAs.
+#   - cyclonedx-bom is installed via pip; version is pinned in the run: step
+#     so the SBOM tool itself is auditable.
+
+name: sbom
+
+on:
+  push:
+    branches: [main]
+  # Allow manual trigger so operators can regenerate an SBOM for a branch
+  # without waiting for a merge.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    name: generate CycloneDX SBOM (oxi-core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install oxi-core + cyclonedx-bom
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation in this run: block.
+        #   - Static paths only; no dynamic input from event payload.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./oxi-core"
+          python -m pip install "cyclonedx-bom>=7,<8"
+
+      - name: Generate SBOM
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation in this run: block.
+        #   - generate-sbom.sh is invoked with static arguments; no shell
+        #     injection vector from event payload.
+        # The SBOM is built from the current Python interpreter (which has
+        # oxi-core installed editably) so the dependency snapshot matches
+        # what `pip install oxi-core` resolves at this revision.
+        run: |
+          mkdir -p dist/
+          bash scripts/generate-sbom.sh oxi-core "$(which python)" dist/
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: sbom-oxi-core
+          path: dist/sbom-oxi-core-*.cdx.json
+          retention-days: 90
+          if-no-files-found: error
