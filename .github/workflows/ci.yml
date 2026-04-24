@@ -101,7 +101,17 @@ jobs:
           python -m pip install -e "./oxi-core[dev]"
           python -m pip install -e "./adapters/_reference[dev]"
       - name: Run pip-audit
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation in this run: block.
+        #   - pip-audit invoked with static flags only. No dynamic input.
         # --ignore-vuln entries target CVEs in pip itself (the CI-image
         # installer), not runtime deps of oxi. Revisit when the CI image
         # ships a newer pip.
-        run: pip-audit --strict --ignore-vuln CVE-2025-8869 --ignore-vuln CVE-2026-1703
+        # Approach: pip freeze --exclude-editable drops our own packages
+        # (oxi-core, oxi-adapter-reference) because they aren't on PyPI
+        # at this version yet. We feed the filtered list to pip-audit so
+        # it scans all third-party deps without trying to resolve our
+        # unreleased versions. --strict turns any finding into a CI fail.
+        run: |
+          python -m pip freeze --exclude-editable > /tmp/audit-reqs.txt
+          pip-audit --strict -r /tmp/audit-reqs.txt --ignore-vuln CVE-2025-8869 --ignore-vuln CVE-2026-1703
