@@ -1,13 +1,15 @@
-"""FakeGitHubClient — deterministic stub for pr_watcher/auto_merge tests.
+"""FakeGitHubClient — deterministic stub for pr_watcher/auto_merge/ci_issue_filer tests.
 
 Lives under tests/fixtures so it's test-only infrastructure. The fake
-lets tests pre-configure PR state (open, merged, closed, CI status)
-and then observe what the production code does against that state.
+lets tests pre-configure PR state (open, merged, closed, CI status,
+individual check runs) and then observe what the production code does
+against that state.
 """
 
 from __future__ import annotations
 
 from oxi_core.v3.github_client import (
+    CheckRun,
     GitHubClient,
     PRCheckStatus,
     PRState,
@@ -22,6 +24,8 @@ class FakeGitHubClient:
         # repo → {pr_number: PullRequest}
         self._prs: dict[str, dict[int, PullRequest]] = {}
         self._merge_calls: list[tuple[str, int, str]] = []
+        # repo → {pr_number: tuple[CheckRun, ...]}
+        self._check_runs: dict[str, dict[int, tuple[CheckRun, ...]]] = {}
 
     # ---- Test setup helpers ------------------------------------------
 
@@ -43,6 +47,16 @@ class FakeGitHubClient:
             number=old.number, title=old.title, head_branch=old.head_branch,
             state=old.state, check_status=status, mergeable=old.mergeable,
         )
+
+    def set_check_runs(
+        self, repo: str, pr_number: int, runs: tuple[CheckRun, ...]
+    ) -> None:
+        """Pre-configure individual check runs for a PR.
+
+        Used by ci_issue_filer tests to exercise per-check-run logic
+        without touching real GitHub.
+        """
+        self._check_runs.setdefault(repo, {})[pr_number] = runs
 
     @property
     def merge_calls(self) -> tuple[tuple[str, int, str], ...]:
@@ -73,6 +87,10 @@ class FakeGitHubClient:
         # Flip to merged.
         self.set_pr_state(repo, pr_number, PRState.MERGED)
         return True
+
+    def list_check_runs(self, repo: str, pr_number: int) -> tuple[CheckRun, ...]:
+        """Return pre-configured check runs, or an empty tuple if none set."""
+        return self._check_runs.get(repo, {}).get(pr_number, ())
 
 
 # Type-check that FakeGitHubClient satisfies the protocol.

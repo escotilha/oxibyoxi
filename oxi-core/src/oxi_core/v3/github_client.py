@@ -1,9 +1,9 @@
 """GitHubClient protocol + a production implementation that shells to ``gh``.
 
-The protocol lets the rest of the engine (pr_watcher, auto_merge) talk
-to GitHub without knowing whether the backing is a real ``gh`` CLI, a
-REST client, or a test fake. Tests inject a deterministic
-``FakeGitHubClient``; production wires ``GhCliClient``.
+The protocol lets the rest of the engine (pr_watcher, auto_merge,
+ci_issue_filer) talk to GitHub without knowing whether the backing is a
+real ``gh`` CLI, a REST client, or a test fake. Tests inject a
+deterministic ``FakeGitHubClient``; production wires ``GhCliClient``.
 
 The surface is minimal — only the PR-state operations the engine
 actually needs:
@@ -13,6 +13,9 @@ actually needs:
 - ``get_pr(repo, pr_number)`` — read one PR's state + CI status.
 - ``merge_pr(repo, pr_number, method)`` — squash-merge a PR (used by
   auto_merge; not by pr_watcher itself).
+- ``list_check_runs(repo, pr_number)`` — return individual check runs
+  attached to the PR's HEAD commit (used by ci_issue_filer to surface
+  specific failing checks in the ledger).
 
 Everything is sync. pr_watcher runs from a timer; latency here is
 bounded by the ``gh`` CLI's own round-trip.
@@ -62,6 +65,23 @@ class PullRequest:
     mergeable: bool | None  # None when GitHub hasn't decided yet
 
 
+@dataclass(frozen=True)
+class CheckRun:
+    """A single check run attached to a PR's HEAD commit.
+
+    Attributes:
+        name: the check's display name (e.g. ``"test (ubuntu-latest)"``).
+        status: one of ``"queued"``, ``"in_progress"``, ``"completed"``.
+        conclusion: terminal verdict once ``status == "completed"``
+            (e.g. ``"success"``, ``"failure"``, ``"cancelled"``).
+            Empty string when the check has not yet completed.
+    """
+
+    name: str
+    status: str
+    conclusion: str  # "" when not yet completed
+
+
 class GitHubClient(Protocol):
     """Minimal interface. Forks can substitute any implementation."""
 
@@ -80,6 +100,16 @@ class GitHubClient(Protocol):
 
         ``method`` is one of 'merge', 'squash', 'rebase'. Default is
         'squash' because that's what most oxi-adjacent projects use.
+        """
+
+    def list_check_runs(
+        self, repo: str, pr_number: int
+    ) -> tuple[CheckRun, ...]:
+        """Return individual check runs for the PR's HEAD commit.
+
+        Used by ``ci_issue_filer`` to surface specific failing checks
+        in the ledger.  Returns an empty tuple when no checks are
+        reported or the PR does not exist.
         """
 
 
@@ -155,6 +185,45 @@ class GhCliClient:
         except GitHubError:
             return False
 
+    def list_check_runs(self, repo: str, pr_number: int) -> tuple[CheckRun, ...]:
+        """Return individual check runs for the PR's HEAD commit.
+
+        Shells to ``gh pr checks`` which returns one check per line in
+        the default output; we use ``--json`` for machine-readable data.
+
+        Falls back to the ``statusCheckRollup`` from ``get_pr`` when
+        ``gh pr checks`` is unavailable (older gh versions), and returns
+        an empty tuple on any unexpected error so callers degrade
+        gracefully.
+        """
+        args = [
+            self._binary, "pr", "checks", str(pr_number),
+            "--repo", repo,
+            "--json", "name,status,conclusion",
+        ]
+        try:
+            out = self._run(args)
+        except GitHubError as e:
+            if "not found" in str(e).lower() or "404" in str(e):
+                return ()
+            # Some older gh versions don't support ``pr checks --json``.
+            # Degrade gracefully: synthesise CheckRun entries from get_pr.
+            pr = self.get_pr(repo, pr_number)
+            if pr is None:
+                return ()
+            return _pr_check_status_to_check_runs(pr.check_status)
+        if not out.strip():
+            return ()
+        items = json.loads(out)
+        return tuple(
+            CheckRun(
+                name=item.get("name", ""),
+                status=(item.get("status") or "").lower(),
+                conclusion=(item.get("conclusion") or "").lower(),
+            )
+            for item in items
+        )
+
     # ---- Internals ---------------------------------------------------
 
     def _run(self, argv: list[str]) -> str:
@@ -195,6 +264,22 @@ class GhCliClient:
             check_status=_rollup_to_status(raw.get("statusCheckRollup", [])),
             mergeable=mergeable,
         )
+
+
+def _pr_check_status_to_check_runs(status: PRCheckStatus) -> tuple[CheckRun, ...]:
+    """Synthesise a single :class:`CheckRun` from a rollup :class:`PRCheckStatus`.
+
+    Used as a graceful degradation path when ``gh pr checks --json`` is
+    unavailable.  The synthetic run uses a sentinel name so
+    ``ci_issue_filer`` can still file a ledger event.
+    """
+    if status is PRCheckStatus.FAILURE:
+        return (CheckRun(name="ci", status="completed", conclusion="failure"),)
+    if status is PRCheckStatus.SUCCESS:
+        return (CheckRun(name="ci", status="completed", conclusion="success"),)
+    if status is PRCheckStatus.PENDING:
+        return (CheckRun(name="ci", status="in_progress", conclusion=""),)
+    return ()
 
 
 def _rollup_to_status(rollup: list) -> PRCheckStatus:
@@ -257,6 +342,7 @@ def _rollup_to_status(rollup: list) -> PRCheckStatus:
 
 
 __all__ = [
+    "CheckRun",
     "GhCliClient",
     "GitHubClient",
     "GitHubError",
