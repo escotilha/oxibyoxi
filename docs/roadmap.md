@@ -23,6 +23,15 @@ _document the PyPI yank vs republish decision tree using the 0.1.0a1 to 0.1.0a2 
 **T0-11 · worktree_provision drift repair**
 _if the target directory exists but the checked-out branch doesn't match the expected feature branch (main, detached HEAD, or a stale sibling branch), nuke and re-provision rather than failing. Today we surface a WorktreeError and the dispatch dies. Fix: validate HEAD via rev-parse --abbrev-ref, compare to expected, repair if drifted. Add git worktree prune before every add._
 
+**T0-101 · adapter entry-point discovery**
+_first-fork blocker. An installed adapter package should auto-register when any oxi command runs, via [project.entry-points."oxi.adapters"] in the adapter's pyproject.toml. Also accept OXI_ADAPTER=pkg:ClassName env var as an override. Without this, every operator has to write a registration snippet before oxi status will load — that's an unacceptable first-fork cliff. See docs/first-fork-checklist.md BLOCKER-1._
+
+**T0-102 · oxi v3 plan --dry-run**
+_first-fork blocker. Parse the roadmap, print what was found (tier, identifier, title, subtitle), don't touch the DB. Operators writing their first roadmap produce natural markdown like `## T0-1 — title` and silently get zero tasks seeded; dry-run surfaces the format pickiness at operator level. See docs/first-fork-checklist.md BLOCKER-3._
+
+**T0-103 · first-fork smoke test in CI**
+_new CI job that builds oxi-core from the same run's wheel, runs `oxi init` with scripted answers, then walks the happy path to a reconciliation-only tick. Catches regressions in the install experience before they land on main. See docs/first-fork-checklist.md proposed path #4._
+
 ## Tier 1
 
 **T1-3 · oxi v3 status --json flag**
@@ -48,6 +57,9 @@ _when a task has failed or been rejected N times, escalate model tier (sonnet to
 
 **T1-14 · ledger_events — typed event-kind constants**
 _new oxi_core.v3.ledger_events with string constants for every event kind emitted across the codebase (dispatch_started, dispatch_succeeded, pr_observed, handoff_written, budget_hard_stop, ...). Migrate call sites to reference the constants. Reduces the string-drift class of bugs and gives the type checker something to hold onto._
+
+**T1-15 · relax success classification when PR exists**
+_when the worker commits, pushes, and opens a PR successfully but claude exits non-zero (pre-commit hook tail, gh pr create post-success exit), dispatch currently marks the task failed — preventing retry and requiring manual DB correction. Observed on every single dogfood dispatch in session 2026-04-24 (4-of-4 false failures). Fix: after dispatch, if the expected branch has a commit ahead of origin/main AND a PR exists, classify SUCCESS regardless of exit code. Dogfood evidence is in ledger events for T0-11, T1-12, T1-13._
 
 ## Tier 2
 
