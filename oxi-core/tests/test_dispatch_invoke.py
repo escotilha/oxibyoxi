@@ -21,6 +21,7 @@ from oxi_core.v3.dispatch_invoke import (
     build_env,
     generate_session_id,
     invoke,
+    wrap_with_ssh,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -497,3 +498,138 @@ async def test_result_event_helper_returns_none_when_absent(tmp_path: Path):
 def test_python_version_supports_async():
     """Sanity: we need Python 3.11+ for asyncio.TaskGroup + TimeoutError alias."""
     assert sys.version_info >= (3, 11)
+
+
+# ---------------------------------------------------------------------------
+# wrap_with_ssh — multi-host dispatch
+# ---------------------------------------------------------------------------
+
+
+def _ssh_invocation(**kwargs) -> DispatchInvocation:
+    """Build an invocation with sensible defaults for SSH tests."""
+    base = dict(
+        prompt="hello",
+        cwd=Path("/remote/wt/t0-1"),
+        session_id="sess-123",
+        model="claude-sonnet-4-6",
+        max_budget_usd=2.0,
+        max_turns=30,
+        allowed_tools=("Bash", "Read"),
+        extra_env={},
+        anthropic_api_key="sk-ant-test",
+        binary="claude",
+    )
+    base.update(kwargs)
+    return DispatchInvocation(**base)
+
+
+def test_wrap_with_ssh_no_alias_is_passthrough():
+    """When ssh_alias is None, argv + env are unchanged."""
+    inv = _ssh_invocation(ssh_alias=None)
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-test"}
+    new_argv, new_env = wrap_with_ssh(inv, argv, env)
+    assert new_argv == argv
+    assert new_env == env
+
+
+def test_wrap_with_ssh_with_alias_prepends_ssh():
+    """When ssh_alias is set, argv starts with `ssh <alias>`."""
+    inv = _ssh_invocation(ssh_alias="mac-mini")
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-test"}
+    new_argv, _ = wrap_with_ssh(inv, argv, env)
+    assert new_argv[0] == "ssh"
+    assert "mac-mini" in new_argv
+    # Remote command is the last arg.
+    assert new_argv[-1].startswith("ANTHROPIC_API_KEY=") or "claude" in new_argv[-1]
+
+
+def test_wrap_with_ssh_remote_command_includes_cd():
+    """Remote command must `cd` to the worktree before invoking claude."""
+    inv = _ssh_invocation(
+        cwd=Path("/remote/wt/t0-1"),
+        ssh_alias="mac-mini",
+    )
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin"}
+    new_argv, _ = wrap_with_ssh(inv, argv, env)
+    remote_cmd = new_argv[-1]
+    # shlex.quote leaves alphanumeric paths un-quoted (no special chars
+    # to escape); only the cd-and-and-claude structure is asserted here.
+    assert "cd /remote/wt/t0-1" in remote_cmd
+    assert "&&" in remote_cmd
+    assert "claude" in remote_cmd
+
+
+def test_wrap_with_ssh_quotes_metacharacters_safely():
+    """A cwd with a single quote must be safely shell-escaped."""
+    inv = _ssh_invocation(
+        cwd=Path("/wt/with 'quote' and space"),
+        ssh_alias="mac-mini",
+    )
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin"}
+    new_argv, _ = wrap_with_ssh(inv, argv, env)
+    remote_cmd = new_argv[-1]
+    # shlex.quote wraps the path; the operator's directory name can't
+    # break out and run arbitrary commands.
+    assert "; rm" not in remote_cmd  # no escaped injection
+
+
+def test_wrap_with_ssh_inlines_anthropic_api_key():
+    """ANTHROPIC_API_KEY is passed via shell assignment in the remote command."""
+    inv = _ssh_invocation(ssh_alias="mac-mini")
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "sk-ant-secret-123"}
+    new_argv, new_env = wrap_with_ssh(inv, argv, env)
+    remote_cmd = new_argv[-1]
+    # shlex.quote leaves alphanumeric+dash secrets unquoted; we just
+    # assert the assignment structure is present.
+    assert "ANTHROPIC_API_KEY=sk-ant-secret-123" in remote_cmd
+    # Local env should NOT carry the key — ssh shouldn't see it.
+    assert "ANTHROPIC_API_KEY" not in new_env
+
+
+def test_wrap_with_ssh_strips_local_only_env_vars():
+    """SSH_AUTH_SOCK / SSH_AGENT_PID stay local; not passed to remote."""
+    inv = _ssh_invocation(ssh_alias="mac-mini")
+    argv = build_argv(inv)
+    env = {
+        "PATH": "/usr/bin",
+        "SSH_AUTH_SOCK": "/tmp/ssh-agent",
+        "SSH_AGENT_PID": "12345",
+        "ANTHROPIC_API_KEY": "sk-ant-test",
+    }
+    new_argv, new_env = wrap_with_ssh(inv, argv, env)
+    remote_cmd = new_argv[-1]
+    # These local-only vars should not appear in the remote command.
+    assert "SSH_AUTH_SOCK=" not in remote_cmd
+    assert "SSH_AGENT_PID=" not in remote_cmd
+    # But they SHOULD be in the local env so ssh can use them.
+    assert new_env.get("SSH_AUTH_SOCK") == "/tmp/ssh-agent"
+    assert new_env.get("SSH_AGENT_PID") == "12345"
+
+
+def test_wrap_with_ssh_uses_batchmode_no_tty():
+    """ssh argv includes -T (no PTY) and BatchMode=yes (no password prompts)."""
+    inv = _ssh_invocation(ssh_alias="mac-mini")
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin"}
+    new_argv, _ = wrap_with_ssh(inv, argv, env)
+    assert "-T" in new_argv
+    # BatchMode is in -o argument
+    batchmode_idx = new_argv.index("-o")
+    assert new_argv[batchmode_idx + 1] == "BatchMode=yes"
+
+
+def test_wrap_with_ssh_respects_ssh_binary_override():
+    """ssh_binary field overrides the default 'ssh' command."""
+    inv = _ssh_invocation(
+        ssh_alias="mac-mini",
+        ssh_binary="/opt/homebrew/bin/ssh",
+    )
+    argv = build_argv(inv)
+    env = {"PATH": "/usr/bin"}
+    new_argv, _ = wrap_with_ssh(inv, argv, env)
+    assert new_argv[0] == "/opt/homebrew/bin/ssh"

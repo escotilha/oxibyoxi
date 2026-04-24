@@ -500,6 +500,7 @@ async def dispatch_one(
         extra_env=dict(extra_env or {}),
         anthropic_api_key=anthropic_api_key,
         binary=binary,
+        ssh_alias=hosts[0].ssh_alias,
     )
 
     # Atomic transition before invoke so the DB reflects reality even

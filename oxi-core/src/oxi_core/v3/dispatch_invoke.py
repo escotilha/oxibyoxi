@@ -58,6 +58,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shlex
 import signal
 import uuid
 from collections.abc import Sequence
@@ -127,6 +128,14 @@ class DispatchInvocation:
     anthropic_api_key: str | None = None  # injected into child env; bypass whitelist
     wall_clock_timeout_s: float = 1800.0  # 30 min default
     binary: str = "claude"  # overridable for tests
+    # When set, the subprocess is invoked over SSH against this alias
+    # (must resolve in the operator's ~/.ssh/config). cwd is interpreted
+    # on the remote host. extra_env + anthropic_api_key are passed
+    # via shell assignment in the remote command, not via the local
+    # subprocess env (the env whitelist still applies on the local side).
+    ssh_alias: str | None = None
+    # Path to the ssh binary on the local machine. Overridable for tests.
+    ssh_binary: str = "ssh"
 
 
 @dataclass
@@ -221,6 +230,87 @@ def build_argv(invocation: DispatchInvocation) -> list[str]:
     ]
 
 
+def wrap_with_ssh(
+    invocation: DispatchInvocation,
+    local_argv: list[str],
+    env: dict[str, str],
+) -> tuple[list[str], dict[str, str]]:
+    """Wrap a local argv + env into an ssh-invocable argv + minimal local env.
+
+    When ``invocation.ssh_alias`` is set, the work needs to run on a
+    remote host that the operator has set up in ``~/.ssh/config``.
+    The remote command is built as a single shell-quoted string so we
+    can prefix env-var assignments + ``cd`` to the remote cwd before
+    invoking ``claude``.
+
+    Returns the new (argv, env) pair: argv invokes ssh; env contains
+    only what ssh itself needs locally (e.g. SSH_AUTH_SOCK from the
+    extended env whitelist).
+
+    The caller is responsible for ensuring the remote host has:
+    - the same ``claude`` binary on PATH (or invocation.binary spells
+      out an absolute path that exists remotely);
+    - any required directory at ``invocation.cwd`` (already
+      provisioned by ``worktree_provision`` if remote worktrees are
+      managed by the same operator workflow);
+    - access to the ANTHROPIC_API_KEY value passed via the env arg.
+
+    Argv-form is preserved end-to-end: the local invocation is
+    ``ssh <alias> <single-quoted-shell-string>``; the remote shell
+    parses the string. No shell metacharacter from invocation fields
+    can escape the shlex.quote because every field is quoted
+    individually.
+    """
+    if invocation.ssh_alias is None:
+        return local_argv, env
+
+    # Build the remote command as a sequence of shell tokens, then
+    # join with single spaces. shlex.quote handles every field's
+    # metacharacters.
+    parts: list[str] = []
+
+    # Env-var assignments — prepended to the command so they're set
+    # only for this process.
+    for key, value in sorted(env.items()):
+        # Skip purely-local vars that don't make sense on the remote.
+        if key in ("SSH_AUTH_SOCK", "SSH_AGENT_PID"):
+            continue
+        parts.append(f"{key}={shlex.quote(value)}")
+
+    # cd to the remote cwd, then exec the binary.
+    cwd_quoted = shlex.quote(str(invocation.cwd))
+    parts.append(f"cd {cwd_quoted}")
+    parts.append("&&")
+    parts.extend(shlex.quote(a) for a in local_argv)
+
+    remote_command = " ".join(parts)
+
+    # Local argv: just ssh + alias + the remote command.
+    # -T disables pseudo-terminal allocation (we want clean stream-json).
+    # -o BatchMode=yes refuses interactive password prompts (fail fast
+    # if key auth is broken instead of hanging).
+    new_argv = [
+        invocation.ssh_binary,
+        "-T",
+        "-o", "BatchMode=yes",
+        invocation.ssh_alias,
+        remote_command,
+    ]
+
+    # Local env: keep only what ssh needs locally to find the agent
+    # and config. Everything else was already inlined into the remote
+    # command above.
+    local_env: dict[str, str] = {}
+    for key in ("PATH", "HOME", "USER", "LANG", "TMPDIR",
+                "SSH_AUTH_SOCK", "SSH_AGENT_PID"):
+        if key in env:
+            local_env[key] = env[key]
+        elif key in os.environ:
+            local_env[key] = os.environ[key]
+
+    return new_argv, local_env
+
+
 async def invoke(invocation: DispatchInvocation) -> DispatchResult:
     """Spawn ``claude -p``, stream events, classify the outcome.
 
@@ -234,15 +324,26 @@ async def invoke(invocation: DispatchInvocation) -> DispatchResult:
         anthropic_api_key=invocation.anthropic_api_key,
     )
 
+    # If this invocation targets a remote host, wrap argv with ssh and
+    # narrow env to the SSH-locally-relevant subset. cwd on the local
+    # side becomes irrelevant (None) because cwd is enforced inside
+    # the remote command via shell `cd`.
+    cwd_arg: str | None = os.fspath(invocation.cwd.resolve())
+    if invocation.ssh_alias is not None:
+        argv, env = wrap_with_ssh(invocation, argv, env)
+        cwd_arg = None
+
     loop = asyncio.get_running_loop()
     start_time = loop.time()
 
+    # Argv-form subprocess (no shell=True, no string interpolation);
+    # ssh wrapping is also argv-form with shlex-quoted remote command.
     proc = await asyncio.create_subprocess_exec(
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         stdin=asyncio.subprocess.DEVNULL,
-        cwd=str(invocation.cwd.resolve()),
+        cwd=cwd_arg,
         env=env,
         start_new_session=True,
         limit=STREAM_READER_LIMIT,
@@ -431,4 +532,5 @@ __all__ = [
     "build_env",
     "generate_session_id",
     "invoke",
+    "wrap_with_ssh",
 ]
