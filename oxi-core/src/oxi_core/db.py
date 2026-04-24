@@ -16,6 +16,7 @@ never run twice. There is no down-migration story — oxi rolls forward.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -177,7 +178,7 @@ def connect(path: Path | None = None) -> DbHandle:
     """
     resolved = path if path is not None else default_db_path()
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(resolved))
+    conn = sqlite3.connect(os.fspath(resolved))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     _apply_migrations(conn)

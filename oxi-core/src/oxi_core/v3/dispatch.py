@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sqlite3
 import subprocess
 from collections.abc import Callable
@@ -95,7 +96,7 @@ def _branch_has_commits_ahead(worktree_path: Path, branch: str) -> bool:
         try:
             proc = subprocess.run(
                 ["git", "rev-list", "--count", f"{remote_ref}...{branch}"],
-                cwd=str(worktree_path),
+                cwd=os.fspath(worktree_path),
                 capture_output=True,
                 text=True,
                 check=False,

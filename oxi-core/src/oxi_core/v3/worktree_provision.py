@@ -48,6 +48,7 @@ path instead:
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -124,7 +125,7 @@ def _run_git(args: list[str], *, cwd: Path | None = None) -> subprocess.Complete
     try:
         proc = subprocess.run(
             cmd,
-            cwd=str(cwd) if cwd is not None else None,
+            cwd=os.fspath(cwd) if cwd is not None else None,
             capture_output=True,
             text=True,
             check=False,
@@ -215,7 +216,7 @@ def _force_remove_worktree(repo_root: Path, worktree_path: Path) -> None:
     prune`` to flush any lingering administrative state.
     """
     try:
-        _run_git(["worktree", "remove", "--force", str(worktree_path)], cwd=repo_root)
+        _run_git(["worktree", "remove", "--force", os.fspath(worktree_path)], cwd=repo_root)
     except WorktreeError:
         shutil.rmtree(worktree_path, ignore_errors=True)
 
@@ -348,7 +349,7 @@ def reap(repo_root: Path, handle: WorktreeHandle, *, delete_branch: bool = False
     if handle.path.exists():
         try:
             _run_git(
-                ["worktree", "remove", "--force", str(handle.path)], cwd=repo_root
+                ["worktree", "remove", "--force", os.fspath(handle.path)], cwd=repo_root
             )
         except WorktreeError:
             # Filesystem path may already be gone (operator cleanup, crash).

@@ -11,6 +11,7 @@ the engine via the killswitch file, not via a button here.
 from __future__ import annotations
 
 import html
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -334,7 +335,7 @@ def _handler_factory(db_path_fn, window_hours: int):
             if path not in ("/", ""):
                 self.send_error(404)
                 return
-            conn = sqlite3.connect(str(db_path_fn()))
+            conn = sqlite3.connect(os.fspath(db_path_fn()))
             conn.row_factory = sqlite3.Row
             try:
                 body = render_html(conn, window_hours=window_hours).encode("utf-8")
