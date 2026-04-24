@@ -25,15 +25,36 @@ than the convenience of GitPython.
 Branch-name collisions are detected before the worktree is created; if
 a worktree for the same task already exists on disk, `provision()`
 returns the existing handle rather than duplicating.
+
+Drift repair (T0-11):
+
+If the target directory exists but the branch checked out there does
+not match the expected feature branch — because it's on ``main``, in a
+detached-HEAD state, or on a stale sibling task's branch — the old
+code surfaced a ``WorktreeError`` and the dispatch died.  The repaired
+path instead:
+
+1. Runs ``git worktree prune`` before every ``worktree add`` to evict
+   stale administrative records left by previous manual or crash
+   cleanups.
+2. Inspects HEAD inside the target directory with
+   ``git rev-parse --abbrev-ref HEAD``.
+3. If the branch has drifted, forces the worktree out via
+   ``git worktree remove --force`` (falling back to ``shutil.rmtree``
+   if that also fails), then re-provisions from scratch on the correct
+   branch.
 """
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BRANCH_PREFIX = "feat/"
 
@@ -170,6 +191,41 @@ def _existing_worktree_for_branch(
     return None
 
 
+def _head_branch(worktree_path: Path) -> str:
+    """Return the branch name checked out in ``worktree_path``.
+
+    Returns ``HEAD`` when in detached-HEAD state (``rev-parse
+    --abbrev-ref`` prints ``HEAD`` for detached checkouts).  Returns
+    an empty string if the path is not a git worktree at all.
+    """
+    try:
+        proc = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=worktree_path)
+        return proc.stdout.strip()
+    except WorktreeError:
+        return ""
+
+
+def _force_remove_worktree(repo_root: Path, worktree_path: Path) -> None:
+    """Forcibly remove a worktree directory and prune its git record.
+
+    Tries ``git worktree remove --force`` first (clean removal that
+    updates git's internal state).  Falls back to ``shutil.rmtree``
+    when git can't locate the worktree in its records (e.g. it was
+    already pruned or the record is corrupt), then runs ``worktree
+    prune`` to flush any lingering administrative state.
+    """
+    try:
+        _run_git(["worktree", "remove", "--force", str(worktree_path)], cwd=repo_root)
+    except WorktreeError:
+        shutil.rmtree(worktree_path, ignore_errors=True)
+
+    # Always prune so git's administrative view matches disk.
+    try:
+        _run_git(["worktree", "prune"], cwd=repo_root)
+    except WorktreeError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -197,6 +253,14 @@ def provision(
     - The target directory is \\`mkdir -p\\`ed; any existing non-git
       content under that path raises \\`WorktreeError\\` rather than being
       clobbered.
+    - **Drift repair**: if the target directory already exists as a git
+      worktree but is checked out on the wrong branch (main, detached
+      HEAD, or a stale sibling branch), the drifted worktree is nuked
+      and re-provisioned on the correct branch rather than raising
+      ``WorktreeError``.
+    - \\`git worktree prune\\` is run before every \\`worktree add\\` to
+      evict stale administrative records left by crashes or manual
+      cleanups.
     """
     if not repo_root.is_dir():
         raise WorktreeError(f"repo_root {repo_root} is not a directory")
@@ -207,6 +271,16 @@ def provision(
     target = worktree_root / _slugify(task_identifier)
     worktree_root.mkdir(parents=True, exist_ok=True)
 
+    # Prune stale worktree records up front so that subsequent checks
+    # (`worktree list`, `worktree add`) operate on a consistent view.
+    # A stale record — e.g. left by a crash or manual rm -rf — would
+    # otherwise make `_existing_worktree_for_branch` believe the branch
+    # is still attached, returning a path that no longer exists on disk.
+    try:
+        _run_git(["worktree", "prune"], cwd=repo_root)
+    except WorktreeError:
+        pass
+
     # If a worktree for this branch already exists, reuse it.
     existing = _existing_worktree_for_branch(repo_root, branch)
     if existing is not None:
@@ -216,6 +290,20 @@ def provision(
                 f"not at expected path {target}"
             )
         return WorktreeHandle(path=existing, branch=branch, session_tag=session_tag)
+
+    # Drift-repair: if the target directory already exists as a git
+    # worktree but is on a different branch, nuke and re-provision.
+    if target.exists() and (target / ".git").exists():
+        actual_branch = _head_branch(target)
+        if actual_branch != branch:
+            logger.warning(
+                "worktree drift detected at %s: expected branch %r, found %r — "
+                "nuking and re-provisioning",
+                target,
+                branch,
+                actual_branch,
+            )
+            _force_remove_worktree(repo_root, target)
 
     # If target path exists and is non-empty non-worktree content, refuse.
     if target.exists() and any(target.iterdir()) and not (target / ".git").exists():

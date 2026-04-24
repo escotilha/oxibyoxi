@@ -321,3 +321,141 @@ def test_reap_handles_manually_deleted_directory(tmp_path: Path):
 
     # reap should clean up git's record of the orphaned worktree without raising.
     reap(clone, handle)
+
+
+# ---------------------------------------------------------------------------
+# Drift repair (T0-11)
+# ---------------------------------------------------------------------------
+
+
+def test_provision_repairs_worktree_drifted_to_unrelated_branch(tmp_path: Path):
+    """Target dir exists as a worktree on an unrelated branch; provision should nuke & re-provision.
+
+    Note: git does not allow a second worktree to check out a branch that
+    is already checked out in the primary clone (e.g. ``main`` when the
+    clone itself is on ``main``).  We simulate the equivalent scenario —
+    the target slot is occupied by a clearly-wrong branch — using a
+    dedicated branch name rather than ``main``.
+    """
+    _, clone = _make_upstream_and_clone(tmp_path)
+    worktree_root = tmp_path / "worktrees"
+    target = worktree_root / "t0-1"
+
+    # Create a branch that represents a "wrong" occupant at the target path.
+    _run(["git", "branch", "fix/unrelated"], cwd=clone)
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    _run(["git", "worktree", "add", str(target), "fix/unrelated"], cwd=clone)
+    assert (target / ".git").exists()
+
+    # Now provision for T0-1 — the target slot is on a wrong branch.
+    handle = provision(
+        repo_root=clone,
+        worktree_root=worktree_root,
+        task_identifier="T0-1",
+        session_tag="sa",
+    )
+
+    assert handle.branch == "feat/sa-t0-1"
+    assert handle.path.is_dir()
+
+    # Verify the worktree is now on the expected branch.
+    proc = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=str(handle.path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "feat/sa-t0-1"
+
+
+def test_provision_repairs_worktree_drifted_to_sibling_branch(tmp_path: Path):
+    """Target dir exists as a worktree on a stale sibling task's branch; should repair."""
+    _, clone = _make_upstream_and_clone(tmp_path)
+    worktree_root = tmp_path / "worktrees"
+    target = worktree_root / "t0-1"
+
+    # Create a stale sibling branch and check it out at the target path.
+    _run(["git", "branch", "feat/sa-t0-9"], cwd=clone)
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    _run(["git", "worktree", "add", str(target), "feat/sa-t0-9"], cwd=clone)
+
+    # Provision for T0-1; drift repair should kick in.
+    handle = provision(
+        repo_root=clone,
+        worktree_root=worktree_root,
+        task_identifier="T0-1",
+        session_tag="sa",
+    )
+
+    assert handle.branch == "feat/sa-t0-1"
+    proc = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=str(handle.path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "feat/sa-t0-1"
+
+
+def test_provision_repairs_detached_head_worktree(tmp_path: Path):
+    """Target dir exists as a worktree in detached-HEAD state; should repair."""
+    _, clone = _make_upstream_and_clone(tmp_path)
+    worktree_root = tmp_path / "worktrees"
+    target = worktree_root / "t0-1"
+
+    # Check out the worktree in detached-HEAD state.
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=str(clone),
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    worktree_root.mkdir(parents=True, exist_ok=True)
+    _run(["git", "worktree", "add", "--detach", str(target), head_sha], cwd=clone)
+
+    handle = provision(
+        repo_root=clone,
+        worktree_root=worktree_root,
+        task_identifier="T0-1",
+        session_tag="sa",
+    )
+
+    assert handle.branch == "feat/sa-t0-1"
+    proc = subprocess.run(
+        ["git", "symbolic-ref", "--short", "HEAD"],
+        cwd=str(handle.path),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert proc.stdout.strip() == "feat/sa-t0-1"
+
+
+def test_provision_prunes_stale_records_before_add(tmp_path: Path):
+    """Stale worktree admin records (dir deleted without git cleanup) don't block re-provision."""
+    _, clone = _make_upstream_and_clone(tmp_path)
+    worktree_root = tmp_path / "worktrees"
+
+    # Provision then manually rm -rf the worktree dir without calling reap.
+    handle = provision(
+        repo_root=clone,
+        worktree_root=worktree_root,
+        task_identifier="T0-1",
+        session_tag="sa",
+    )
+    import shutil as _shutil
+    _shutil.rmtree(handle.path)
+
+    # At this point git's worktree list still has a stale record for the deleted dir.
+    # Re-provisioning the same task should succeed because provision() prunes first.
+    handle2 = provision(
+        repo_root=clone,
+        worktree_root=worktree_root,
+        task_identifier="T0-1",
+        session_tag="sa",
+    )
+    assert handle2.branch == "feat/sa-t0-1"
+    assert handle2.path.is_dir()
