@@ -96,6 +96,28 @@ jobs:
         working-directory: adapters/_self
         run: pytest -q
 
+  first-fork-smoke:
+    name: first-fork smoke (wheel → oxi init → tick)
+    runs-on: ubuntu-latest
+    # Security review:
+    #   - No ${{ github.event.* }} interpolation anywhere in run: blocks.
+    #   - The smoke script uses only static paths inside a mktemp workspace.
+    #   - No secrets consumed; ANTHROPIC_API_KEY is intentionally absent
+    #     (the test exercises reconciliation-only tick, not real Claude).
+    #   - The `build` step produces a wheel from the checked-out source;
+    #     no external packages are fetched beyond PyPI build deps.
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b  # v5.3.0
+        with:
+          python-version: "3.12"
+      - name: Run first-fork smoke test
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation in this run: block.
+        #   - Script invoked with a static path; no dynamic input.
+        run: bash scripts/smoke/first-fork.sh
+
   pip-audit:
     name: pip-audit (dependency CVEs)
     runs-on: ubuntu-latest
