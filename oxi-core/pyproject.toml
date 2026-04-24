@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxi-core"
-version = "0.1.0a4"
+version = "0.1.0a5"
 description = "Standalone, forkable autonomous coding orchestrator."
 readme = "README.md"
 license = { text = "MIT" }
@@ -37,6 +37,9 @@ oxi = "oxi_core.cli:main"
 
 [project.urls]
 Repository = "https://github.com/escotilha/oxi"
+Documentation = "https://github.com/escotilha/oxi/tree/main/docs/manual"
+"Release Notes" = "https://github.com/escotilha/oxi/releases"
+Issues = "https://github.com/escotilha/oxi/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]

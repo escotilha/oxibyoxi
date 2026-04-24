@@ -61,6 +61,15 @@ _new oxi_core.v3.ledger_events with string constants for every event kind emitte
 **T1-15 · relax success classification when PR exists**
 _when the worker commits, pushes, and opens a PR successfully but claude exits non-zero (pre-commit hook tail, gh pr create post-success exit), dispatch currently marks the task failed — preventing retry and requiring manual DB correction. Observed on every single dogfood dispatch in session 2026-04-24 (4-of-4 false failures). Fix: after dispatch, if the expected branch has a commit ahead of origin/main AND a PR exists, classify SUCCESS regardless of exit code. Dogfood evidence is in ledger events for T0-11, T1-12, T1-13._
 
+**T1-16 · bandit + CodeQL SAST in CI**
+_add Python-aware static analysis to close the biggest gap in the security-scan surface. bandit catches unsafe subprocess patterns, weak hashing, insecure temp-file handling; CodeQL catches taint flows and logic bugs across PRs. Both run as dedicated CI jobs with SHA-pinned actions; findings surface as PR annotations. Tunes: ignore oxi's intentional argv-form subprocess pattern (bandit B603) while keeping shell=True detection._
+
+**T1-17 · SBOM generation for each release**
+_emit a CycloneDX SBOM during scripts/release.sh (or as a release-time CI job) so operators can audit the dependency graph shipped in every pip install. Include it as a release artifact on GitHub. Use cyclonedx-bom python package; stamp the SBOM into release notes._
+
+**T1-18 · auto-healing engine self-state**
+_complement T1-12 (auto_recover) and T1-13 (deep_fix) with engine-level self-monitoring. If N consecutive dispatches fail, pause dispatch and emit engine_unhealthy event instead of churning budget. Surface in dashboard with health banner. Operator resets via `oxi v3 unkill` (or new `oxi v3 heal`). Prevents runaway failures from burning the daily cap during unattended runs._
+
 ## Tier 2
 
 **T2-8 · extract repeat SQL patterns into query helpers**
@@ -71,6 +80,9 @@ _tighten path-to-str casts at subprocess and SQLite boundaries. Update loose doc
 
 **T2-10 · pytest-timeout guard for CI**
 _add pytest-timeout to dev deps; default 30s per-test, 180s on @pytest.mark.slow. Cuts CI hangs when a server-thread test wedges._
+
+**T2-11 · auto-observation: engine reads its own ledger and proposes roadmap items**
+_the engine already auto-writes fixes via dogfood dispatch, but it doesn't yet auto-identify what to fix. New oxi_core.v3.auto_observe module watches the ledger for signals: repeated dispatch failures on the same code path, critic-rejection patterns, worktree-drift events clustering on specific tasks. Emits a proposed roadmap entry when a pattern crosses threshold (e.g. 3 occurrences in 48h). Operator reviews + accepts via `oxi v3 observe --accept <id>`. Closes the self-improvement loop: engine doesn't just fix its own bugs, it notices them._
 
 ---
 
