@@ -159,7 +159,10 @@ TWINE_ARGS=("upload" "--non-interactive")
 if [[ "${TARGET}" == "testpypi" ]]; then
   TWINE_ARGS+=("--repository-url" "${REPOSITORY_URL}")
 fi
-TWINE_ARGS+=("dist/"*)
+# Upload only the wheel and sdist — twine rejects anything else as
+# "Unknown distribution format". The SBOM JSON in dist/ is a release
+# artifact for GitHub Releases, not for PyPI.
+TWINE_ARGS+=("dist/"*.whl "dist/"*.tar.gz)
 
 TWINE_USERNAME="__token__" TWINE_PASSWORD="${TOKEN}" \
   python -m twine "${TWINE_ARGS[@]}"
