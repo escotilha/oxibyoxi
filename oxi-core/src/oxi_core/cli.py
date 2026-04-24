@@ -270,6 +270,35 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
         )
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    """Scaffold a new adapter. Does NOT require an active adapter."""
+    from .wizard import run as wizard_run
+
+    # If the operator didn't provide a destination, ask the wizard for
+    # answers first so we can use the slug in the default directory.
+    if args.destination is None:
+        from .wizard import collect_answers, default_template_root, scaffold
+
+        answers = collect_answers()
+        dest = Path.cwd() / f"oxi-adapter-{answers.adapter_slug}"
+        scaffold(
+            answers, dest,
+            template_root=default_template_root(),
+            force=args.force,
+        )
+        print()
+        print(f"oxi init: scaffolded into {dest}")
+        print()
+        print("Next steps:")
+        print(f"  1. cd {dest}")
+        print("  2. pip install -e .")
+        print("  3. oxi status   # confirms the adapter loads")
+        return 0
+
+    wizard_run(args.destination, force=args.force)
+    return 0
+
+
 def cmd_dashboard(args: argparse.Namespace) -> int:
     _require_adapter()
     adapter = get_active_adapter()
@@ -304,6 +333,22 @@ def _build_parser() -> argparse.ArgumentParser:
         "--version", action="version", version=f"oxi {__version__}"
     )
     sub = parser.add_subparsers(dest="command")
+
+    # `oxi init` — scaffold a new adapter.
+    p_init = sub.add_parser(
+        "init",
+        help="scaffold a new oxi adapter for your project",
+    )
+    p_init.add_argument(
+        "destination", type=Path, nargs="?", default=None,
+        help="where to write the adapter package "
+             "(default: ./oxi-adapter-<slug>)",
+    )
+    p_init.add_argument(
+        "--force", action="store_true",
+        help="overwrite existing files in destination",
+    )
+    p_init.set_defaults(func=cmd_init)
 
     # `oxi status` (top-level alias for v3 status)
     p_status = sub.add_parser("status", help="print task + event summary")
