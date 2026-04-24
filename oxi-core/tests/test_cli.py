@@ -92,6 +92,33 @@ def test_status_shows_plan_tier_and_repo(_env, capsys):
     assert "oxi-test" in out
 
 
+def test_status_shows_killswitch_off_when_inactive(_env, capsys):
+    assert not _env["ks_path"].exists()
+    rc = main(["status"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "killswitch" in out
+    assert "off" in out
+
+
+def test_status_shows_killswitch_active_when_set(_env, capsys):
+    _env["ks_path"].write_text("maintenance window\n")
+    rc = main(["status"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "killswitch" in out
+    assert "ACTIVE" in out
+    assert "maintenance window" in out
+
+
+def test_status_shows_killswitch_active_without_reason(_env, capsys):
+    _env["ks_path"].write_text("")
+    rc = main(["status"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "ACTIVE" in out
+
+
 def test_status_shows_task_counts(_env, capsys):
     _env["conn"].execute(
         "INSERT INTO task (identifier, tier, title, status) "
@@ -194,7 +221,7 @@ def test_brief_write_flag_creates_file(_env, tmp_path: Path, capsys):
 
 def test_kill_creates_file(_env, capsys):
     assert not _env["ks_path"].exists()
-    rc = main(["v3", "kill", "--reason", "test halt"])
+    rc = main(["v3", "kill", "--reason", "test halt", "--yes"])
     assert rc == 0
     assert _env["ks_path"].exists()
     assert "test halt" in _env["ks_path"].read_text()
@@ -202,10 +229,71 @@ def test_kill_creates_file(_env, capsys):
     assert "killswitch set" in out
 
 
-def test_unkill_removes_file(_env, capsys):
-    main(["v3", "kill"])
+def test_kill_short_yes_flag(_env, capsys):
+    assert not _env["ks_path"].exists()
+    rc = main(["v3", "kill", "-y"])
+    assert rc == 0
     assert _env["ks_path"].exists()
-    rc = main(["v3", "unkill"])
+    out = capsys.readouterr().out
+    assert "killswitch set" in out
+
+
+def test_kill_without_yes_and_eof_aborts(_env, capsys, monkeypatch):
+    """Without -y and with EOF on stdin, kill should abort (exit 1)."""
+    monkeypatch.setattr("builtins.input", lambda _: (_ for _ in ()).throw(EOFError))
+    assert not _env["ks_path"].exists()
+    rc = main(["v3", "kill"])
+    assert rc == 1
+    assert not _env["ks_path"].exists()
+    out = capsys.readouterr().out
+    assert "aborted" in out
+
+
+def test_kill_without_yes_and_no_answer_aborts(_env, capsys, monkeypatch):
+    """Without -y, answering 'n' should abort."""
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    assert not _env["ks_path"].exists()
+    rc = main(["v3", "kill"])
+    assert rc == 1
+    assert not _env["ks_path"].exists()
+    out = capsys.readouterr().out
+    assert "aborted" in out
+
+
+def test_kill_without_yes_and_yes_answer_proceeds(_env, capsys, monkeypatch):
+    """Without -y, answering 'y' at the prompt should create the killswitch."""
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+    assert not _env["ks_path"].exists()
+    rc = main(["v3", "kill"])
+    assert rc == 0
+    assert _env["ks_path"].exists()
+    out = capsys.readouterr().out
+    assert "killswitch set" in out
+
+
+def test_kill_shows_existing_state_when_already_active(_env, capsys):
+    """kill should tell the operator the killswitch is already set."""
+    _env["ks_path"].write_text("previous reason\n")
+    rc = main(["v3", "kill", "--reason", "new reason", "--yes"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already active" in out
+
+
+def test_unkill_removes_file(_env, capsys):
+    main(["v3", "kill", "--yes"])
+    assert _env["ks_path"].exists()
+    rc = main(["v3", "unkill", "--yes"])
+    assert rc == 0
+    assert not _env["ks_path"].exists()
+    out = capsys.readouterr().out
+    assert "killswitch cleared" in out
+
+
+def test_unkill_short_yes_flag(_env, capsys):
+    main(["v3", "kill", "--yes"])
+    assert _env["ks_path"].exists()
+    rc = main(["v3", "unkill", "-y"])
     assert rc == 0
     assert not _env["ks_path"].exists()
     out = capsys.readouterr().out
@@ -220,13 +308,35 @@ def test_unkill_when_absent_is_noop(_env, capsys):
     assert "not present" in out
 
 
+def test_unkill_without_yes_and_eof_aborts(_env, capsys, monkeypatch):
+    """Without -y and with EOF on stdin, unkill should abort (exit 1)."""
+    _env["ks_path"].write_text("held\n")
+    monkeypatch.setattr("builtins.input", lambda _: (_ for _ in ()).throw(EOFError))
+    rc = main(["v3", "unkill"])
+    assert rc == 1
+    assert _env["ks_path"].exists()  # still there
+    out = capsys.readouterr().out
+    assert "aborted" in out
+
+
+def test_unkill_without_yes_and_no_answer_aborts(_env, capsys, monkeypatch):
+    """Without -y, answering 'n' at the unkill prompt should leave the file in place."""
+    _env["ks_path"].write_text("held\n")
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    rc = main(["v3", "unkill"])
+    assert rc == 1
+    assert _env["ks_path"].exists()
+    out = capsys.readouterr().out
+    assert "aborted" in out
+
+
 # ---------------------------------------------------------------------------
 # `oxi v3 tick`
 # ---------------------------------------------------------------------------
 
 
 def test_tick_with_killswitch_is_noop(_env, capsys):
-    # Set the killswitch before ticking.
+    # Set the killswitch directly (bypassing the CLI confirmation).
     from oxi_core.v3 import kill as kill_mod
     kill_mod.create(reason="held")
 

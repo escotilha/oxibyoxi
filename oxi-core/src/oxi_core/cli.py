@@ -7,9 +7,9 @@ Commands:
     oxi v3 tick [--times N]     run N dispatch/heartbeat/pr_watcher/auto_merge cycles
     oxi v3 status [--json]      alias for `status`
     oxi v3 plan --dry-run       parse the roadmap and print what was found (no DB write)
-    oxi v3 kill [--reason R]    create the killswitch file
-    oxi v3 unkill               remove the killswitch file
-    oxi v3 heal                 reset engine-unhealthy state after consecutive failures
+    oxi v3 kill [--reason R] [-y]   create the killswitch file (prompts unless -y)
+    oxi v3 unkill [-y]              remove the killswitch file (prompts unless -y)
+    oxi v3 heal                     reset engine-unhealthy state after consecutive failures
     oxi brief [--hours N]       print the markdown brief to stdout (or --write)
     oxi dashboard [--port]      start the localhost HTML dashboard
 
@@ -106,10 +106,22 @@ def cmd_status(args: argparse.Namespace) -> int:
             return 0
 
         # Human-readable output.
+        from .v3 import kill as kill_mod
+
+        ks_active = kill_mod.is_set()
+        ks_path = kill_mod.path()
+
         print(f"oxi {__version__}")
         print(f"  instance:  {adapter.naming().instance_name}")
         print(f"  plan tier: {adapter.plan_tier()}")
         print(f"  repo:      {adapter.github_repo()}")
+        if ks_active:
+            ks_reason = ks_path.read_text().strip()
+            reason_suffix = f" — {ks_reason}" if ks_reason else ""
+            print(f"  killswitch: ⚠ ACTIVE{reason_suffix}")
+            print(f"              {ks_path}")
+        else:
+            print("  killswitch: off")
         print()
 
         # Engine health — show at the very top if unhealthy so operators see
@@ -197,25 +209,71 @@ def cmd_brief(args: argparse.Namespace) -> int:
     return 0
 
 
+def _confirm(prompt: str, *, yes: bool) -> bool:
+    """Return True if the operator confirms the action.
+
+    If ``yes`` is True (``-y`` / ``--yes`` flag), skip the prompt and
+    return True immediately — suitable for non-interactive scripts.
+
+    On a non-TTY stdin the prompt is shown but the read will succeed or
+    raise ``EOFError``; we treat EOF as "no" to fail-safe.
+    """
+    if yes:
+        return True
+    try:
+        answer = input(f"{prompt} [y/N] ").strip().lower()
+    except EOFError:
+        return False
+    return answer in {"y", "yes"}
+
+
 def cmd_kill(args: argparse.Namespace) -> int:
     _require_adapter()
-    from .v3.kill import create
+    from .v3 import kill as kill_mod
 
-    p = create(reason=args.reason or "")
+    ks_path = kill_mod.path()
+    already_active = kill_mod.is_set(ks_path)
+
+    if already_active:
+        existing_reason = ks_path.read_text().strip()
+        reason_suffix = f" (reason: {existing_reason})" if existing_reason else ""
+        print(f"oxi: killswitch is already active at {ks_path}{reason_suffix}")
+    else:
+        print(f"oxi: this will halt the engine by creating {ks_path}")
+
+    reason_str = args.reason or ""
+    if reason_str:
+        print(f"     reason: {reason_str}")
+
+    if not _confirm("Set killswitch?", yes=getattr(args, "yes", False)):
+        print("oxi: aborted.")
+        return 1
+
+    p = kill_mod.create(reason=reason_str)
     print(f"oxi: killswitch set at {p}")
     return 0
 
 
-def cmd_unkill(args: argparse.Namespace) -> int:  # noqa: ARG001
+def cmd_unkill(args: argparse.Namespace) -> int:
     _require_adapter()
-    from .v3.kill import path, remove
+    from .v3 import kill as kill_mod
 
-    removed = remove()
-    p = path()
-    if removed:
-        print(f"oxi: killswitch cleared at {p}")
-    else:
-        print(f"oxi: killswitch not present at {p}")
+    ks_path = kill_mod.path()
+
+    if not kill_mod.is_set(ks_path):
+        print(f"oxi: killswitch not present at {ks_path}")
+        return 0
+
+    existing_reason = ks_path.read_text().strip()
+    reason_suffix = f" (reason: {existing_reason})" if existing_reason else ""
+    print(f"oxi: this will resume the engine by removing {ks_path}{reason_suffix}")
+
+    if not _confirm("Clear killswitch?", yes=getattr(args, "yes", False)):
+        print("oxi: aborted.")
+        return 1
+
+    kill_mod.remove(ks_path)
+    print(f"oxi: killswitch cleared at {ks_path}")
     return 0
 
 
@@ -612,11 +670,27 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_v3_plan.set_defaults(func=cmd_plan)
 
-    p_v3_kill = p_v3_sub.add_parser("kill", help="create the killswitch file")
-    p_v3_kill.add_argument("--reason", default="", help="reason string")
+    p_v3_kill = p_v3_sub.add_parser(
+        "kill",
+        help="create the killswitch file (halts the engine)",
+    )
+    p_v3_kill.add_argument("--reason", default="", help="reason string stored in the file")
+    p_v3_kill.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="skip the confirmation prompt (for non-interactive scripts)",
+    )
     p_v3_kill.set_defaults(func=cmd_kill)
 
-    p_v3_unkill = p_v3_sub.add_parser("unkill", help="remove the killswitch file")
+    p_v3_unkill = p_v3_sub.add_parser(
+        "unkill",
+        help="remove the killswitch file (resumes the engine)",
+    )
+    p_v3_unkill.add_argument(
+        "-y", "--yes",
+        action="store_true",
+        help="skip the confirmation prompt (for non-interactive scripts)",
+    )
     p_v3_unkill.set_defaults(func=cmd_unkill)
 
     p_v3_heal = p_v3_sub.add_parser(
