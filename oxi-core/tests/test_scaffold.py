@@ -18,5 +18,8 @@ def test_cli_returns_zero_with_no_args(capsys) -> None:
 
 
 def test_cli_returns_nonzero_on_unknown_command(capsys) -> None:
-    rc = main(["not-a-command"])
-    assert rc == 2
+    """Argparse raises SystemExit(2) for unknown subcommands."""
+    import pytest
+    with pytest.raises(SystemExit) as exc:
+        main(["not-a-command"])
+    assert exc.value.code == 2
