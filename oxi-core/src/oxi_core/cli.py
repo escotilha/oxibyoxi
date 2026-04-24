@@ -167,14 +167,18 @@ def cmd_tick(args: argparse.Namespace) -> int:
         print("oxi: killswitch is set; tick is a no-op")
         return 0
 
-    # Dispatch one cycle. We don't wire the full loop here yet — real
-    # Claude invocation is Phase 2. `oxi v3 tick` reports the current
-    # DB state and runs the cheap reconciliation passes.
-    print(f"oxi: tick --times {args.times} (reconciliation-only)")
+    # Two modes:
+    # - Default (reconciliation-only): runs heartbeat.reap, no Claude.
+    # - --real-claude: additionally runs dispatch + auto_merge with a
+    #   ClaudeCriticBackend. Spends real budget. Off by default.
+    if args.real_claude:
+        print(
+            f"oxi: tick --times {args.times} (REAL CLAUDE — "
+            "dispatches + critic-gated auto_merge)"
+        )
+    else:
+        print(f"oxi: tick --times {args.times} (reconciliation-only)")
 
-    # Run heartbeat reap and pr_watcher — these don't need Claude.
-    # We skip dispatch + auto_merge when there's no claude binary or
-    # critic backend configured (future CLI flag work).
     from .v3 import heartbeat
 
     handle = connect()
@@ -192,10 +196,61 @@ def cmd_tick(args: argparse.Namespace) -> int:
                     f"protected_by_pr={report.protected_by_pr} "
                     f"fresh={report.skipped_fresh}"
                 )
+            if args.real_claude:
+                _run_real_claude_tick(handle.connection, state, adapter)
         print(f"oxi: tick done. abandoned={total_abandoned}")
     finally:
         handle.connection.close()
     return 0
+
+
+def _run_real_claude_tick(conn, state, adapter) -> None:
+    """One iteration of dispatch → pr_watcher → auto_merge with real claude.
+
+    Split out of ``cmd_tick`` so tests can exercise the reconciliation
+    path without importing the async dispatch machinery. Only called
+    when ``--real-claude`` is passed.
+    """
+    import asyncio
+
+    from .v3 import auto_merge, dispatch, pr_watcher
+    from .v3.critic import ClaudeCriticBackend
+
+    repo_root_str = adapter.paths().repo_root or "."
+    repo_root = Path(repo_root_str)
+
+    result = asyncio.run(
+        dispatch.dispatch_one(
+            conn=conn,
+            adapter=adapter,
+            engine_state=state,
+            repo_root=repo_root,
+        )
+    )
+    if result is not None:
+        print(
+            f"  dispatch: classification={result.classification.value} "
+            f"cost=${result.cost_usd:.4f}"
+        )
+
+    watch_report = pr_watcher.watch(conn, state)
+    if (watch_report.pr_numbers_stamped
+            or watch_report.tasks_transitioned_merged
+            or watch_report.tasks_transitioned_failed):
+        print(
+            f"  pr_watcher: stamped={watch_report.pr_numbers_stamped} "
+            f"merged={watch_report.tasks_transitioned_merged} "
+            f"failed={watch_report.tasks_transitioned_failed}"
+        )
+
+    critic = ClaudeCriticBackend(cwd=repo_root)
+    merge_report = auto_merge.run(conn, state, critic)
+    if merge_report.considered:
+        print(
+            f"  auto_merge: considered={merge_report.considered} "
+            f"merged={merge_report.merged} "
+            f"rejected={merge_report.critic_rejected}"
+        )
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
@@ -255,6 +310,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_v3_tick = p_v3_sub.add_parser("tick", help="run one or more engine cycles")
     p_v3_tick.add_argument("--times", type=int, default=1, help="iterations")
+    p_v3_tick.add_argument(
+        "--real-claude", action="store_true",
+        help="invoke real claude for dispatch + critic (spends budget). "
+             "Off by default.",
+    )
     p_v3_tick.set_defaults(func=cmd_tick)
 
     p_v3_kill = p_v3_sub.add_parser("kill", help="create the killswitch file")

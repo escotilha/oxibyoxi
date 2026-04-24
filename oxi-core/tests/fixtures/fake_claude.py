@@ -212,6 +212,35 @@ def scenario_echo_env(session_id: str) -> int:
     return 0
 
 
+def scenario_critic_approve(session_id: str) -> int:
+    """Emit a critic APPROVE response shaped like a real review.
+
+    Tests ClaudeCriticBackend end-to-end: assistant event text must be
+    the exact two-line APPROVE format ``parse_critic_response``
+    consumes.
+    """
+    _emit(_init_event(session_id))
+    _emit(_assistant_event("APPROVE\nclean diff, tests pass", session_id))
+    _emit(_result_event(session_id))
+    return 0
+
+
+def scenario_critic_reject(session_id: str) -> int:
+    """Emit a critic REJECT response."""
+    _emit(_init_event(session_id))
+    _emit(_assistant_event("REJECT\ncommented-out tests", session_id))
+    _emit(_result_event(session_id))
+    return 0
+
+
+def scenario_critic_garbage(session_id: str) -> int:
+    """Emit an unparseable critic response — should default to REJECT."""
+    _emit(_init_event(session_id))
+    _emit(_assistant_event("I think this diff is fine.", session_id))
+    _emit(_result_event(session_id))
+    return 0
+
+
 SCENARIOS: dict[str, callable] = {
     "happy": scenario_happy,
     "rate_limit_retry_ok": scenario_rate_limit_retry_ok,
@@ -222,6 +251,9 @@ SCENARIOS: dict[str, callable] = {
     "hung": scenario_hung,
     "stderr_garbage": scenario_stderr_garbage,
     "echo_env": scenario_echo_env,
+    "critic_approve": scenario_critic_approve,
+    "critic_reject": scenario_critic_reject,
+    "critic_garbage": scenario_critic_garbage,
 }
 
 
