@@ -1,0 +1,29 @@
+# bandit configuration for oxi.
+#
+# Intentional skip list (append-only; document every entry):
+#
+#   B603 subprocess_without_shell_equals_true
+#     oxi deliberately uses argv-form subprocess (list, never a string) for
+#     all git / gh / claude invocations.  This is the SAFE pattern; bandit
+#     flags it as informational but it is not a finding here.  Keep shell=True
+#     detection (B602) active — a regression there would be a real issue.
+#
+#   B607 start_process_with_partial_path
+#     git, gh, and claude are resolved via PATH at runtime.  oxi intentionally
+#     delegates binary discovery to the operator's PATH rather than
+#     hard-coding absolute paths (which differ across macOS homebrew, nix,
+#     and Linux distro installs).
+#
+#   B608 hardcoded_sql_expressions
+#     oxi constructs SQL IN-clauses from module-level frozenset constants
+#     (_FAILURE_KINDS, ALL_STATIC_KINDS) by f-string interpolation.  These
+#     are *not* user input — they are hardcoded event-kind strings defined
+#     in oxi_core.v3.ledger_events.  Every user-derived value is passed via
+#     ``?`` placeholder (see every conn.execute in the codebase).  The
+#     static-IN-clause pattern is verified by the parameterized-SQL audit
+#     documented in SECURITY.md.
+
+skips:
+  - B603
+  - B607
+  - B608

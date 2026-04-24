@@ -11,9 +11,10 @@
 #   - Third-party actions pinned to full commit SHAs (not mutable tag refs)
 #     per OpenSSF guidance — prevents a compromised upstream actions/*
 #     namespace from silently running new code in our CI.
-#   - The only ${{ secrets.* }} reference is GITHUB_TOKEN in a safely-scoped
-#     env: block on the gitleaks action (which needs it to post results).
-#     permissions: contents: read further bounds what that token can do.
+#   - The only ${{ secrets.* }} reference is GITHUB_TOKEN in safely-scoped
+#     env: / permissions: blocks (gitleaks needs pull-requests: write to
+#     annotate; CodeQL needs security-events: write to upload SARIF).
+#     Both are scoped to the individual job, not the workflow.
 
 name: ci
 
@@ -147,3 +148,80 @@ jobs:
         run: |
           python -m pip freeze --exclude-editable > /tmp/audit-reqs.txt
           pip-audit --strict -r /tmp/audit-reqs.txt --ignore-vuln CVE-2025-8869 --ignore-vuln CVE-2026-1703
+
+  bandit:
+    name: bandit (Python SAST)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install bandit
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation in this run: block.
+        #   - bandit is installed at a pinned minimum version; no dynamic input.
+        run: python -m pip install --upgrade pip "bandit[toml]>=1.8"
+      - name: Run bandit (oxi-core)
+        # Security review:
+        #   - Invoked with static flags only.  No dynamic input.
+        #   - Skip list in .bandit.yaml covers intentional patterns only;
+        #     see that file for per-ID rationale.
+        #   - B603 (subprocess_without_shell_equals_true) is skipped because
+        #     oxi deliberately uses argv-form list subprocess for git/gh/claude.
+        #     B602 (shell=True) is NOT skipped — regressions there are real.
+        #   - B607 (start_process_with_partial_path) is skipped because oxi
+        #     resolves binaries via the operator's PATH by design.
+        run: |
+          bandit -r oxi-core/src \
+            -c .bandit.yaml \
+            --severity-level medium \
+            --confidence-level medium
+      - name: Run bandit (adapters)
+        run: |
+          bandit -r adapters/_reference/src adapters/_self/src \
+            -c .bandit.yaml \
+            --severity-level medium \
+            --confidence-level medium
+
+  codeql:
+    name: CodeQL (Python taint analysis)
+    runs-on: ubuntu-latest
+    # Security review:
+    #   - No ${{ github.event.* }} interpolation in this job.
+    #   - Static action invocations only; no dynamic command construction.
+    # continue-on-error because CodeQL's SARIF upload requires GitHub
+    # Advanced Security, not available on private repos without a
+    # subscription. Scan still runs; findings appear in the job log.
+    # When this repo goes public (or GHAS is enabled), drop
+    # continue-on-error so CodeQL failures block PRs.
+    continue-on-error: true
+    # CodeQL needs security-events: write to upload the SARIF results file
+    # so findings surface as PR annotations in the Security tab.
+    # contents: read is sufficient for checkout + analysis.
+    # Scoped to this job only — other jobs retain the workflow-level
+    # contents: read.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - name: Initialize CodeQL
+        # Security review:
+        #   - SHA-pinned to github/codeql-action v3.35.2 tag SHA.
+        #   - languages: python — no compiled-language autobuild step needed.
+        #   - No ${{ github.event.* }} interpolation.
+        #   - queries: security-extended adds taint-flow and injection checks
+        #     on top of the default security suite.
+        uses: github/codeql-action/init@b2f9ef845756500b97acbdaf5c1dd4e9c1d15734  # v3.35.2
+        with:
+          languages: python
+          queries: security-extended
+      - name: Perform CodeQL Analysis
+        # Security review:
+        #   - Same SHA pin as the init step above (same action release).
+        #   - No dynamic input; output goes to GitHub's security dashboard.
+        uses: github/codeql-action/analyze@b2f9ef845756500b97acbdaf5c1dd4e9c1d15734  # v3.35.2
+        with:
+          category: "/language:python"
