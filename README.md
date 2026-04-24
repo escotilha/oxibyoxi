@@ -1,6 +1,23 @@
 # oxi
 
-**Forkable autonomous coding orchestrator.** Reads a roadmap, dispatches parallel Claude Code sessions, opens PRs, gates merges through a critic, ships a daily brief. One binary, one command, project-agnostic.
+**Point Claude Code at a markdown roadmap. Walk away. Come back to PRs.**
+
+oxi turns `roadmap.md` into shipped code. Each tick: it picks the next planned task, spawns a `claude -p` session in a fresh git worktree, watches the worker open a PR, runs a second-model critic on the diff, and merges (or rejects) according to your policy. Every guardrail you'd want — budget hard-cap, killswitch, heartbeat reaper, ship-recovery, prompt-injection isolation, parameterized SQL, env-whitelisted subprocess — is on by default.
+
+You write a ~70-line adapter that tells oxi about your project (repo, budget, plan tier). Core has zero strings naming any specific project. Forking is `pip install --pre oxi-core && oxi init`.
+
+```bash
+pip install --pre oxi-core      # alpha — --pre is required
+cd my-project
+oxi init                        # 8-prompt wizard scaffolds your adapter
+cd oxi-adapter-myproject && pip install -e .
+oxi status                      # ✓ adapter loaded
+oxi v3 tick --real-claude       # spends budget, ships PRs
+```
+
+The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks/install.md). Full operator manual at [`docs/manual/`](docs/manual/).
+
+**Status:** beta (`0.1.0b1` on PyPI). The engine built most of itself today via dogfood — 59 PRs merged, $20.15 of dispatch spend, every safety rail proven in production. See [release notes](docs/release-notes/v0.1.0b1.md) for what's in this cut.
 
 ## What it does
 
@@ -123,7 +140,7 @@ oxi-core/                        # ships as `oxi-core` on PyPI
 │       ├── ingest_roadmap.py   # roadmap → fronts table
 │       └── seed_from_roadmap.py    # auto-replenish queue
 │
-└── tests/                       # 460+ tests, fake claude + fake GitHub
+└── tests/                       # 860+ tests, fake claude + fake GitHub
 
 adapters/
 ├── _reference/                 # ships as `oxi-adapter-reference`; drives sample-project
@@ -136,20 +153,22 @@ sample-project/                 # throwaway fixture for end-to-end tests
 
 - **One binary, one command.** `oxi init`, then `oxi v3 tick`. No sprawling CLI surface.
 - **Everything project-specific lives in an adapter.** Core has zero strings naming any specific project.
-- **Fake the world in tests.** 460+ tests use `fake_claude.py` + `FakeGitHubClient`; no real Claude or GitHub contact in CI.
+- **Fake the world in tests.** 860+ tests use `fake_claude.py` + `FakeGitHubClient`; no real Claude or GitHub contact in CI.
 - **Atomic state transitions.** Every status update stamps `last_progress_at` in the same transaction. Reapers never trust `created_at`.
 - **Protocols over implementations.** `CriticBackend`, `GitHubClient`, `NotificationBackend` are pluggable. Forks substitute any of them.
 - **No premature abstraction.** Three similar lines beats one generic helper that handles three cases.
 
 ## Roadmap
 
-See [`docs/PLAN.md`](docs/PLAN.md). Phase 1 (engine + smoke test) and Phase 2 (safety rails) are complete. Phase 3 is in progress. The first published release will be `0.1.0-alpha`.
+See [`docs/roadmap.md`](docs/roadmap.md) for current items. Phase 1 (engine), Phase 2 (safety + dogfood), Phase 3 (operator polish) all shipped. Beta is live (`0.1.0b1`); next milestone is `0.2.0` for any breaking adapter-protocol changes. Release history at [`docs/release-notes/`](docs/release-notes/).
 
 ## Status
 
-**Pre-alpha.** The engine runs; 460+ tests pass; the fake-claude end-to-end smoke test closes the full loop. Never dogfooded on a real repo — that's Phase 2 per the plan.
+**Beta** (`0.1.0b1`). The engine has dogfooded itself end-to-end — 59 PRs merged in one day with the engine writing ~40 of them, $20.15 of dispatch spend that hit the daily-hard-cap rail exactly as designed, full first-fork install path verified against PyPI from a fresh venv. 860+ tests pass against a fake-claude + fake-GitHub harness.
 
-If you're willing to run an unproven orchestrator against your project: you can. Budget caps bound the damage at whatever you set `daily_hard_cap` to.
+The 0.1.0b* line commits to no breaking changes within minor. 0.2.0+ may break the adapter protocol; check release notes.
+
+Budget caps bound damage at whatever you set `daily_hard_cap` to. Auto-merge defaults off — opt in explicitly per `DispatchPolicy`.
 
 ## License
 
@@ -157,7 +176,9 @@ MIT at `1.0`. Everything here is safe to fork, modify, redistribute.
 
 ## Contributing
 
-Open an issue first. Don't open PRs yet — the engine's output quality isn't yet verified against a real dogfooding cycle, and unsolicited PRs would be reviewed on a best-effort basis.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch conventions, PR format, the dogfood-first rule, and how to author your own adapter. Issue templates at [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) walk you through bug reports (with a ledger-dump snippet) and feature requests.
+
+Limited-invite phase right now; external PRs reviewed best-effort. Public flip is gated on the [public-flip checklist](docs/public-flip-checklist.md).
 
 ## Anti-patterns
 
