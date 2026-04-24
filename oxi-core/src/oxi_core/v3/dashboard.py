@@ -18,6 +18,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..adapter import get_active_adapter
 from .brief import generate as generate_brief
+from .engine_health import HEALTH_BANNER, is_engine_unhealthy_from_db
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,32 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
         )
     task_rows = "".join(task_rows_parts) or "<tr><td colspan=5><em>no tasks</em></td></tr>"
 
+    # Health banner — shown when the engine's consecutive-failure threshold
+    # was crossed.  The in-memory EngineHealth is not accessible from here
+    # (the dashboard is a pure DB query layer), so we read the DB events.
+    #
+    # NOTE: the health-banner CSS rule is rendered inline only when the banner
+    # is shown.  This keeps the string "health-banner" absent from the HTML
+    # when the engine is healthy, allowing simple substring checks in tests.
+    engine_is_unhealthy = is_engine_unhealthy_from_db(conn)
+    if engine_is_unhealthy:
+        health_banner_html = (
+            '<style>'
+            '.health-banner {'
+            '  margin-bottom: 1.5rem;'
+            '  padding: 0.75rem 1rem;'
+            '  background: #f8d7da;'
+            '  border: 1px solid #f5c2c7;'
+            '  border-radius: 4px;'
+            '  color: #842029;'
+            '  font-weight: bold;'
+            '}'
+            '</style>'
+            f'<div class="health-banner">{html.escape(HEALTH_BANNER)}</div>'
+        )
+    else:
+        health_banner_html = ""
+
     now = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     return f"""<!doctype html>
 <html lang="en">
@@ -250,6 +277,7 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
 </style>
 </head>
 <body>
+{health_banner_html}
 <h1>{html.escape(instance)}</h1>
 <p class="meta">
   repo: <code>{html.escape(repo)}</code> &middot;

@@ -56,6 +56,7 @@ from .dispatch_invoke import (
     generate_session_id,
     invoke,
 )
+from .engine_health import EngineHealth
 from .engine_state import EngineState
 from .ledger_events import LedgerEvent
 from .worktree_provision import WorktreeError, provision
@@ -401,6 +402,7 @@ async def dispatch_one(
     conn: sqlite3.Connection,
     adapter: Adapter,
     engine_state: EngineState,
+    engine_health: EngineHealth | None = None,
     repo_root: Path,
     binary: str = "claude",
     anthropic_api_key: str | None = None,
@@ -414,6 +416,7 @@ async def dispatch_one(
 
     Returns None when:
     - ``engine_state.is_stopping()`` is True at entry
+    - ``engine_health.is_unhealthy()`` is True (paused after consecutive failures)
     - no ``planned`` tasks exist
 
     Raises on infrastructure failures (worktree provisioning error,
@@ -422,9 +425,21 @@ async def dispatch_one(
 
     The ``_check_commits`` and ``_check_pr`` parameters are for testing
     only; production callers should leave them as None (defaults apply).
+
+    ``engine_health`` is optional for backwards compatibility with callers
+    that don't yet pass it.  If None, health-gating is skipped.
     """
     if engine_state.is_stopping():
         logger.info("dispatch: engine stopping, skipping tick")
+        return None
+
+    # Health gate — refuse to dispatch if consecutive failures have
+    # triggered the unhealthy state.  Operator resets via `oxi v3 heal`.
+    if engine_health is not None and engine_health.is_unhealthy():
+        logger.warning(
+            "dispatch: engine unhealthy (consecutive failures), skipping tick. "
+            "Run `oxi v3 heal` to resume."
+        )
         return None
 
     # Budget gate — refuse to spend more if the hard cap is hit.
@@ -508,6 +523,24 @@ async def dispatch_one(
 
     _record_outcome(conn, task.id, result)
 
+    # Health tracking — update consecutive-failure counter AFTER the DB
+    # write so the counter only moves when the outcome is durably recorded.
+    if engine_health is not None:
+        if result.classification is Classification.SUCCESS:
+            engine_health.record_success()
+        elif result.classification in (
+            Classification.FAILED,
+            Classification.TIMEOUT,
+        ):
+            engine_health.record_failure(
+                conn,
+                reason=result.classification.value,
+            )
+        # RETRYABLE_TRANSIENT is not a terminal failure — it's a transient
+        # condition (rate limit, OOM). We do NOT increment the failure
+        # counter for it so retryable signals don't trigger the unhealthy
+        # state during normal rate-limit backoff.
+
     return result
 
 
@@ -516,11 +549,15 @@ async def dispatch_loop(
     conn: sqlite3.Connection,
     adapter: Adapter,
     engine_state: EngineState,
+    engine_health: EngineHealth | None = None,
     repo_root: Path,
     max_iterations: int = 1,
     binary: str = "claude",
     anthropic_api_key: str | None = None,
     extra_env: dict[str, str] | None = None,
+    # Injectable for tests: forwarded to dispatch_one → _maybe_upgrade_to_success.
+    _check_commits: Callable[[Path, str], bool] | None = None,
+    _check_pr: Callable[[str, str], bool] | None = None,
 ) -> list[DispatchResult]:
     """Run the dispatch step up to ``max_iterations`` times.
 
@@ -528,22 +565,32 @@ async def dispatch_loop(
     iteration — not just at entry. This is the killswitch-mid-loop
     fix documented in the prior-orchestrator post-mortems.
 
-    Stops early when either:
+    Stops early when any of:
     - engine_state requests stop
+    - engine_health is unhealthy (consecutive failures exceeded threshold)
     - dispatch_one() returns None (no planned tasks left)
+
+    The ``_check_commits`` and ``_check_pr`` parameters are for testing
+    only; production callers should leave them as None (defaults apply).
+    They are forwarded verbatim to each ``dispatch_one`` call.
     """
     results: list[DispatchResult] = []
     for _ in range(max_iterations):
         if engine_state.is_stopping():
             break
+        if engine_health is not None and engine_health.is_unhealthy():
+            break
         outcome = await dispatch_one(
             conn=conn,
             adapter=adapter,
             engine_state=engine_state,
+            engine_health=engine_health,
             repo_root=repo_root,
             binary=binary,
             anthropic_api_key=anthropic_api_key,
             extra_env=extra_env,
+            _check_commits=_check_commits,
+            _check_pr=_check_pr,
         )
         if outcome is None:
             break
@@ -580,4 +627,6 @@ __all__ = [
     "dispatch_loop",
     "dispatch_one",
     "is_orphan_reapable",
+    # Re-exported so callers can import EngineHealth from this module.
+    "EngineHealth",
 ]

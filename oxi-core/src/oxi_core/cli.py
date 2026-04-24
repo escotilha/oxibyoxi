@@ -9,6 +9,7 @@ Commands:
     oxi v3 plan --dry-run       parse the roadmap and print what was found (no DB write)
     oxi v3 kill [--reason R]    create the killswitch file
     oxi v3 unkill               remove the killswitch file
+    oxi v3 heal                 reset engine-unhealthy state after consecutive failures
     oxi brief [--hours N]       print the markdown brief to stdout (or --write)
     oxi dashboard [--port]      start the localhost HTML dashboard
 
@@ -111,6 +112,16 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"  repo:      {adapter.github_repo()}")
         print()
 
+        # Engine health — show at the very top if unhealthy so operators see
+        # it immediately.  Healthy engines show nothing extra here.
+        from .v3.engine_health import is_engine_unhealthy_from_db
+        if is_engine_unhealthy_from_db(conn):
+            print(
+                "✗ ENGINE UNHEALTHY — dispatch paused after consecutive failures. "
+                "Run `oxi v3 heal` to resume."
+            )
+            print()
+
         # Budget first — operators need to see hard-stop before anything else.
         from .v3 import budget as budget_mod
         status = budget_mod.check(conn)
@@ -208,11 +219,53 @@ def cmd_unkill(args: argparse.Namespace) -> int:  # noqa: ARG001
     return 0
 
 
+def cmd_heal(args: argparse.Namespace) -> int:  # noqa: ARG001
+    """Reset the engine-unhealthy state written by the auto-healing subsystem.
+
+    When N consecutive dispatches fail, the engine transitions to
+    UNHEALTHY and pauses dispatch to prevent burning the daily budget
+    during unattended runs.  ``oxi v3 heal`` clears that state so the
+    engine will accept new dispatches again on the next tick.
+
+    This writes an ``engine_healed`` event to the DB so the dashboard
+    and the brief both reflect that a human cleared the condition.
+    """
+    _require_adapter()
+    from .v3.engine_health import (
+        EngineHealth,
+        HealthStatus,
+        is_engine_unhealthy_from_db,
+    )
+
+    handle = connect()
+    try:
+        conn = handle.connection
+        was_unhealthy = is_engine_unhealthy_from_db(conn)
+
+        if was_unhealthy:
+            # Write the engine_healed DB event.  We set the in-memory
+            # status to UNHEALTHY first so heal() detects a real
+            # transition and emits the event.
+            health = EngineHealth()
+            health._status = HealthStatus.UNHEALTHY  # noqa: SLF001
+            health.heal(conn, operator="oxi v3 heal")
+            print(
+                "oxi: engine-unhealthy state cleared. "
+                "Dispatch will resume on next tick."
+            )
+        else:
+            print("oxi: engine is already healthy — nothing to do.")
+    finally:
+        handle.connection.close()
+    return 0
+
+
 def cmd_tick(args: argparse.Namespace) -> int:
     _require_adapter()
     adapter = get_active_adapter()
     from .v3 import kill as kill_mod
     from .v3._color import green, red, yellow
+    from .v3.engine_health import EngineHealth
     from .v3.engine_state import EngineState
 
     state = EngineState(
@@ -221,6 +274,8 @@ def cmd_tick(args: argparse.Namespace) -> int:
             (h.max_concurrent for h in adapter.dispatch_hosts()), default=1
         ),
     )
+    health = EngineHealth()
+
     if kill_mod.is_set():
         state.request_stop()
         print("oxi: killswitch is set; tick is a no-op")
@@ -246,6 +301,12 @@ def cmd_tick(args: argparse.Namespace) -> int:
         total_recovered = 0
         for _ in range(args.times):
             if state.is_stopping():
+                break
+            if health.is_unhealthy():
+                print(
+                    "  health: engine UNHEALTHY — dispatch paused. "
+                    "Run `oxi v3 heal` to resume."
+                )
                 break
             report = heartbeat.reap(handle.connection, state)
             total_abandoned += report.abandoned
@@ -277,7 +338,7 @@ def cmd_tick(args: argparse.Namespace) -> int:
                 print(recover_line)
 
             if args.real_claude:
-                _run_real_claude_tick(handle.connection, state, adapter)
+                _run_real_claude_tick(handle.connection, state, health, adapter)
 
         summary = (
             f"oxi: tick done. abandoned={total_abandoned} "
@@ -295,7 +356,7 @@ def cmd_tick(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_real_claude_tick(conn, state, adapter) -> None:
+def _run_real_claude_tick(conn, state, health, adapter) -> None:
     """One iteration of dispatch → pr_watcher → auto_merge with real claude.
 
     Split out of ``cmd_tick`` so tests can exercise the reconciliation
@@ -323,6 +384,7 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
             conn=conn,
             adapter=adapter,
             engine_state=state,
+            engine_health=health,
             repo_root=repo_root,
             anthropic_api_key=anthropic_api_key,
         )
@@ -341,6 +403,11 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
             # FAILED or TIMEOUT
             dispatch_line = red(dispatch_line)
         print(dispatch_line)
+        if health.is_unhealthy():
+            print(
+                "  health: engine UNHEALTHY after consecutive failures — "
+                "dispatch paused. Run `oxi v3 heal` to resume."
+            )
 
     watch_report = pr_watcher.watch(conn, state)
     if (watch_report.pr_numbers_stamped
@@ -551,6 +618,15 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_v3_unkill = p_v3_sub.add_parser("unkill", help="remove the killswitch file")
     p_v3_unkill.set_defaults(func=cmd_unkill)
+
+    p_v3_heal = p_v3_sub.add_parser(
+        "heal",
+        help=(
+            "reset engine-unhealthy state — resumes dispatch after "
+            "consecutive failure pause"
+        ),
+    )
+    p_v3_heal.set_defaults(func=cmd_heal)
 
     # `oxi dashboard`
     p_dashboard = sub.add_parser("dashboard", help="start the localhost HTML dashboard")
