@@ -18,15 +18,21 @@ You need a GitHub repo and a local checkout of it. oxi ships PRs against that re
 
 ## Step 1 — install oxi-core
 
+oxi is still in alpha. pip's default resolver ignores pre-releases, so
+you must pass `--pre` or pin the version explicitly. Otherwise pip
+grabs the `0.0.0` name-reservation stub instead of the working alpha.
+
 ```bash
-pip install oxi-core
+pip install --pre oxi-core
+# or pin explicitly:
+pip install oxi-core==0.1.0a3
 ```
 
 Verify:
 
 ```bash
 oxi --version
-# oxi 0.1.0a2
+# oxi 0.1.0a3
 ```
 
 If `oxi` is not found after install, your pip's `bin/` directory is not on `PATH`. Find it with `pip show -f oxi-core | grep Scripts` (Windows) or `python -m site --user-base` (macOS/Linux) and add `<base>/bin` to `PATH`.

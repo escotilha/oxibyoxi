@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxi-core"
-version = "0.1.0a2"
+version = "0.1.0a3"
 description = "Standalone, forkable autonomous coding orchestrator."
 readme = "README.md"
 license = { text = "MIT" }
