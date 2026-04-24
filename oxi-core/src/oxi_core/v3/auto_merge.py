@@ -40,9 +40,9 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from ..adapter import RoadmapItem, get_active_adapter
+from ._timefmt import now_iso as _now_iso
 from .critic import CriticBackend, CriticInput, Verdict
 from .dispatch import Task
 from .engine_state import EngineState
@@ -75,8 +75,6 @@ class AutoMergeReport:
 # ---------------------------------------------------------------------------
 
 
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _load_candidates(conn: sqlite3.Connection) -> list[Task]:

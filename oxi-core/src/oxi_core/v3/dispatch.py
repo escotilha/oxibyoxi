@@ -44,11 +44,11 @@ import sqlite3
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ..adapter import Adapter, RoadmapItem
 from ..prompts import dispatch_prompt
+from ._timefmt import now_iso as _now_iso
 from .dispatch_invoke import (
     Classification,
     DispatchInvocation,
@@ -191,16 +191,6 @@ def _maybe_upgrade_to_success(
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    """Return the current UTC time as an ISO-8601 string.
-
-    The SQLite schema stores timestamps as TEXT. Using datetime.now(utc)
-    keeps callers consistent; ``default (datetime('now'))`` in the
-    schema also uses UTC, so formats align.
-    """
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 @dataclass(frozen=True)

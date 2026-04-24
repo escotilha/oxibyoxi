@@ -47,10 +47,10 @@ import shlex
 import sqlite3
 import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ..adapter import get_active_adapter
+from ._timefmt import now_iso as _now_iso
 from .dispatch import Task
 from .engine_state import EngineState
 from .github_client import GhCliClient, GitHubClient
@@ -75,8 +75,6 @@ class ShipReport:
     worktree_missing: int
 
 
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _run_git(

@@ -33,6 +33,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from ._timefmt import now_iso as _now_iso
 from .engine_state import EngineState
 
 logger = logging.getLogger(__name__)
@@ -44,10 +45,6 @@ class SeedReport:
     planned_after: int
     seeded: int
     eligible: int  # fronts that passed cooldown + no-existing-task gates
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _planned_count(conn: sqlite3.Connection) -> int:

@@ -70,6 +70,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from ._timefmt import now_iso as _now_iso
 from .dispatch import Task
 from .engine_state import EngineState
 
@@ -130,10 +131,6 @@ class RecoverReport:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_timestamp(value: str | None) -> datetime | None:

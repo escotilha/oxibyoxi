@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from ..adapter import get_active_adapter
+from ._timefmt import now_iso as _now_iso
 from .dispatch import Task
 from .engine_state import EngineState
 
@@ -165,10 +166,6 @@ _FAILURE_KINDS: frozenset[str] = frozenset({
 
 _ESCALATION_KIND = "deep_fix_escalated"
 _EXHAUSTED_KIND = "deep_fix_exhausted"
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _load_failed_tasks(conn: sqlite3.Connection) -> list[Task]:

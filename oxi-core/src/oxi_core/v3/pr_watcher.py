@@ -41,9 +41,9 @@ import logging
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from ..adapter import get_active_adapter
+from ._timefmt import now_iso as _now_iso
 from .dispatch import Task
 from .engine_state import EngineState
 from .github_client import GhCliClient, GitHubClient, PRCheckStatus, PRState, PullRequest
@@ -101,10 +101,6 @@ class WatchReport:
 # ---------------------------------------------------------------------------
 # State transitions
 # ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _stamp_pr_number(conn: sqlite3.Connection, task: Task, pr_number: int) -> None:
