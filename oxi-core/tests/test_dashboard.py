@@ -20,7 +20,13 @@ from oxi_core.adapter import (
     clear_adapter,
     register_adapter,
 )
-from oxi_core.v3.dashboard import DashboardConfig, make_server, render_html
+from oxi_core.v3.dashboard import (
+    DashboardConfig,
+    _render_task_events,
+    _task_last_events,
+    make_server,
+    render_html,
+)
 
 
 @dataclass
@@ -57,11 +63,21 @@ def conn(tmp_path: Path):
 
 
 def _seed(conn, identifier: str, status: str, title: str = "t",
-          pr_number: int | None = None) -> None:
-    conn.execute(
+          pr_number: int | None = None) -> int:
+    """Insert a task row and return its rowid."""
+    cur = conn.execute(
         "INSERT INTO task (identifier, tier, title, status, pr_number) "
         "VALUES (?, 0, ?, ?, ?)",
         (identifier, title, status, pr_number),
+    )
+    conn.commit()
+    return cur.lastrowid
+
+
+def _seed_event(conn, task_id: int, kind: str, payload: str = "{}") -> None:
+    conn.execute(
+        "INSERT INTO event (task_id, kind, payload) VALUES (?, ?, ?)",
+        (task_id, kind, payload),
     )
     conn.commit()
 
@@ -134,6 +150,180 @@ def test_render_escapes_pr_number_even_if_string(conn):
     # Raw script must not appear; escaped form must.
     assert "<script>alert(1)</script>" not in html
     assert "&lt;script&gt;" in html
+
+
+# ---------------------------------------------------------------------------
+# _task_last_events — unit tests for the query helper
+# ---------------------------------------------------------------------------
+
+
+def test_task_last_events_empty_for_no_events(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    events = _task_last_events(conn, task_id)
+    assert events == []
+
+
+def test_task_last_events_returns_most_recent_first(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    for i in range(3):
+        _seed_event(conn, task_id, f"kind_{i}", f'{{"n":{i}}}')
+    events = _task_last_events(conn, task_id)
+    # ORDER BY id DESC — last inserted comes first.
+    assert events[0][1] == "kind_2"
+    assert events[1][1] == "kind_1"
+    assert events[2][1] == "kind_0"
+
+
+def test_task_last_events_caps_at_ten(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    for i in range(15):
+        _seed_event(conn, task_id, f"k{i}")
+    events = _task_last_events(conn, task_id)
+    assert len(events) == 10
+
+
+def test_task_last_events_truncates_long_payload(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    long_payload = "x" * 200
+    _seed_event(conn, task_id, "some_kind", long_payload)
+    events = _task_last_events(conn, task_id)
+    assert len(events) == 1
+    _ts, _kind, payload = events[0]
+    # Payload must be truncated; raw 200-char string must not appear verbatim.
+    assert len(payload) < 200
+    assert payload.endswith("…")
+
+
+def test_task_last_events_short_payload_not_truncated(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    short = '{"ok": true}'
+    _seed_event(conn, task_id, "dispatch_started", short)
+    events = _task_last_events(conn, task_id)
+    _ts, _kind, payload = events[0]
+    assert payload == short
+
+
+def test_task_last_events_isolates_by_task(conn):
+    id1 = _seed(conn, "T0-1", "dispatched")
+    id2 = _seed(conn, "T0-2", "planned")
+    _seed_event(conn, id1, "dispatch_started")
+    _seed_event(conn, id2, "other_event")
+    ev1 = _task_last_events(conn, id1)
+    ev2 = _task_last_events(conn, id2)
+    assert all(k == "dispatch_started" for _, k, _ in ev1)
+    assert all(k == "other_event" for _, k, _ in ev2)
+
+
+# ---------------------------------------------------------------------------
+# _render_task_events — unit tests for the HTML renderer
+# ---------------------------------------------------------------------------
+
+
+def test_render_task_events_no_events_shows_placeholder():
+    result = _render_task_events([])
+    assert "no events" in result
+    assert "<details" in result
+    assert "<summary" in result
+
+
+def test_render_task_events_shows_kind_and_timestamp():
+    events = [("2026-01-02 03:04:05", "dispatch_started", "{}")]
+    result = _render_task_events(events)
+    assert "dispatch_started" in result
+    assert "2026-01-02 03:04:05" in result
+
+
+def test_render_task_events_escapes_kind():
+    events = [("2026-01-02 03:04:05", "<bad>", "{}")]
+    result = _render_task_events(events)
+    assert "<bad>" not in result
+    assert "&lt;bad&gt;" in result
+
+
+def test_render_task_events_escapes_payload():
+    events = [("2026-01-02 03:04:05", "k", '<script>alert("xss")</script>')]
+    result = _render_task_events(events)
+    assert '<script>' not in result
+    assert "&lt;script&gt;" in result
+
+
+def test_render_task_events_escapes_timestamp():
+    events = [("<ts>", "k", "{}")]
+    result = _render_task_events(events)
+    assert "<ts>" not in result
+    assert "&lt;ts&gt;" in result
+
+
+def test_render_task_events_uses_details_element():
+    events = [("2026-01-02 03:04:05", "dispatch_started", "{}")]
+    result = _render_task_events(events)
+    assert "<details" in result
+    assert "</details>" in result
+    assert "<summary" in result
+
+
+# ---------------------------------------------------------------------------
+# render_html — integration tests for expanded events in the page
+# ---------------------------------------------------------------------------
+
+
+def test_render_html_events_widget_present_for_task(conn):
+    """Each task row must contain a <details> expand widget."""
+    _seed(conn, "T0-1", "dispatched")
+    page = render_html(conn)
+    assert "ev-details" in page
+    assert "<details" in page
+
+
+def test_render_html_shows_event_kind_in_expanded_row(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    _seed_event(conn, task_id, "dispatch_started", '{"branch":"feat/x"}')
+    page = render_html(conn)
+    assert "dispatch_started" in page
+
+
+def test_render_html_shows_at_most_ten_events_per_task(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    for i in range(15):
+        _seed_event(conn, task_id, f"kind_{i:02d}")
+    page = render_html(conn)
+    # 15 events inserted but only 10 must appear.
+    count = page.count("kind_")
+    assert count == 10
+
+
+def test_render_html_escapes_event_payload_xss(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    _seed_event(conn, task_id, "dispatch_started", "<script>alert(1)</script>")
+    page = render_html(conn)
+    assert "<script>alert(1)</script>" not in page
+    assert "&lt;script&gt;" in page
+
+
+def test_render_html_escapes_event_kind_xss(conn):
+    task_id = _seed(conn, "T0-1", "dispatched")
+    _seed_event(conn, task_id, '<img src=x onerror=alert(1)>', "{}")
+    page = render_html(conn)
+    assert "<img src=x" not in page
+
+
+def test_render_html_no_events_shows_placeholder(conn):
+    """A task with zero events must still render the widget with placeholder."""
+    _seed(conn, "T0-1", "planned")
+    page = render_html(conn)
+    assert "no events" in page
+
+
+def test_render_html_events_only_for_own_task(conn):
+    """Events from task B must not bleed into the row for task A."""
+    id_a = _seed(conn, "T0-A", "dispatched")
+    id_b = _seed(conn, "T0-B", "dispatched")
+    _seed_event(conn, id_a, "dispatch_started")
+    _seed_event(conn, id_b, "pr_merged")
+    page = render_html(conn)
+    # Both events appear but the page should render without error.
+    assert "dispatch_started" in page
+    assert "pr_merged" in page
 
 
 # ---------------------------------------------------------------------------

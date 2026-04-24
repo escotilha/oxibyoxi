@@ -55,6 +55,77 @@ def _render_failures(failures: list[tuple[str, str, str]]) -> str:
     return "".join(parts)
 
 
+_PAYLOAD_TRUNCATE = 120  # characters shown in the event payload cell
+
+
+def _task_last_events(
+    conn: sqlite3.Connection,
+    task_id: int,
+    limit: int = 10,
+) -> list[tuple[str, str, str]]:
+    """Return up to *limit* most-recent events for *task_id*.
+
+    Each element is ``(created_at, kind, payload_truncated)`` — all
+    strings, already safe to pass to ``html.escape``.  The payload is
+    truncated to ``_PAYLOAD_TRUNCATE`` characters *before* escaping so
+    that the raw byte count is predictable.
+    """
+    rows = conn.execute(
+        "SELECT created_at, kind, payload "
+        "FROM event WHERE task_id = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (task_id, limit),
+    ).fetchall()
+    result = []
+    for row in rows:
+        ts = row["created_at"] or ""
+        kind = row["kind"] or ""
+        payload_raw = row["payload"] or ""
+        if len(payload_raw) > _PAYLOAD_TRUNCATE:
+            payload_raw = payload_raw[:_PAYLOAD_TRUNCATE] + "…"
+        result.append((ts, kind, payload_raw))
+    return result
+
+
+def _render_task_events(events: list[tuple[str, str, str]]) -> str:
+    """Render a mini HTML table of ledger events for a task detail pane.
+
+    Called once per task row. Returns a ``<details>`` block whose
+    ``<summary>`` is the clickable toggle — no JS required.  All
+    user-controlled strings are HTML-escaped.
+    """
+    if not events:
+        no_events = "<em>no events</em>"
+        return (
+            '<details class="ev-details">'
+            "<summary>▶ events</summary>"
+            f'<div class="ev-pane">{no_events}</div>'
+            "</details>"
+        )
+    rows = "".join(
+        "<tr>"
+        f"<td>{html.escape(ts)}</td>"
+        f"<td><code>{html.escape(kind)}</code></td>"
+        f"<td><code>{html.escape(payload)}</code></td>"
+        "</tr>"
+        for ts, kind, payload in events
+    )
+    table = (
+        '<table class="ev-table">'
+        "<thead><tr>"
+        "<th>timestamp</th><th>kind</th><th>payload (truncated)</th>"
+        "</tr></thead>"
+        f"<tbody>{rows}</tbody>"
+        "</table>"
+    )
+    return (
+        '<details class="ev-details">'
+        "<summary>▶ events</summary>"
+        f'<div class="ev-pane">{table}</div>'
+        "</details>"
+    )
+
+
 def _recovered_task_ids(conn: sqlite3.Connection) -> set[int]:
     """Return task IDs that have at least one ``auto_recover_attempted`` event.
 
@@ -106,9 +177,12 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
             if task_id in recovered_ids
             else ""
         )
+        events = _task_last_events(conn, task_id)
+        events_widget = _render_task_events(events)
         task_rows_parts.append(
             "<tr>"
-            f"<td><code>{html.escape(ident)}</code>{retry_badge}</td>"
+            f"<td><code>{html.escape(ident)}</code>{retry_badge}"
+            f"{events_widget}</td>"
             f"<td>{html.escape(title)}</td>"
             f"<td>{html.escape(status)}</td>"
             # pr is INTEGER in schema but forks may relax it; escape defensively.
@@ -145,6 +219,34 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
   color: #856404;
   vertical-align: middle;
 }}
+.ev-details {{
+  display: block;
+  margin-top: 0.3rem;
+}}
+.ev-details summary {{
+  cursor: pointer;
+  font-size: 0.75em;
+  color: #0057b8;
+  user-select: none;
+  list-style: none;
+}}
+.ev-details summary::-webkit-details-marker {{ display: none; }}
+.ev-details[open] summary {{ color: #003d82; }}
+.ev-pane {{
+  margin-top: 0.3rem;
+  padding: 0.3rem 0.5rem;
+  background: #f8f8f8;
+  border-left: 3px solid #ddd;
+  font-size: 0.8em;
+}}
+.ev-table {{ border-collapse: collapse; width: max-content; max-width: 60vw; }}
+.ev-table th, .ev-table td {{
+  border: 1px solid #ddd;
+  padding: 0.15rem 0.4rem;
+  text-align: left;
+  white-space: nowrap;
+}}
+.ev-table th {{ background: #efefef; }}
 </style>
 </head>
 <body>
@@ -266,5 +368,6 @@ __all__ = [
     "serve",
 ]
 
-# _recovered_task_ids is intentionally not in __all__ — it is an
-# internal query helper.  Tests that need it import it directly.
+# _recovered_task_ids, _task_last_events, _render_task_events are
+# intentionally not in __all__ — they are internal query/render helpers.
+# Tests that need them import directly.
