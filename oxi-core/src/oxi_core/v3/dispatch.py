@@ -27,6 +27,13 @@ Invariants this module enforces (each grounded in a prior incident):
   (the worker opens the PR from its end; status moves later by
   pr_watcher). retryable → stays ``planned``. failed → ``failed``.
   timeout → ``abandoned``.
+- **False-failure relaxation** — when claude exits non-zero but the
+  expected branch is ahead of ``origin/<default>`` AND a PR exists,
+  the exit code most likely came from a pre-commit hook tail or a
+  ``gh pr create`` post-success quirk.  In that case the result is
+  upgraded to SUCCESS so the task stays ``dispatched`` and pr_watcher
+  picks it up normally.  Dogfood evidence: 4-of-4 dispatches in
+  session 2026-04-24 false-failed this way (T0-11, T1-12, T1-13).
 """
 
 from __future__ import annotations
@@ -34,6 +41,8 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,6 +66,126 @@ logger = logging.getLogger(__name__)
 # Oxi uses "oxi" as the default for its own dispatches; forks can set
 # this via an adapter extension point (to be added when needed).
 DEFAULT_SESSION_TAG = "oxi"
+
+
+# ---------------------------------------------------------------------------
+# False-failure relaxation helpers (T1-15)
+# ---------------------------------------------------------------------------
+
+
+def _branch_has_commits_ahead(worktree_path: Path, branch: str) -> bool:
+    """Return True if ``branch`` has at least one commit not in ``origin/main``.
+
+    Uses ``git rev-list --count origin/HEAD...<branch>`` so it works
+    regardless of whether the default branch is called ``main`` or
+    ``master``.  Falls back to ``origin/main`` if ``origin/HEAD`` is
+    not configured.
+
+    A non-zero count means the worker pushed at least one commit, which
+    is strong evidence that the substantive work landed even if claude
+    subsequently exited non-zero.
+
+    Returns False on any subprocess error so the caller degrades
+    gracefully (keeps FAILED classification) rather than crashing.
+    """
+    # Try origin/HEAD first (adapter-agnostic), fall back to origin/main.
+    for remote_ref in ("origin/HEAD", "origin/main"):
+        try:
+            proc = subprocess.run(
+                ["git", "rev-list", "--count", f"{remote_ref}...{branch}"],
+                cwd=str(worktree_path),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                count_str = proc.stdout.strip()
+                return count_str.isdigit() and int(count_str) > 0
+        except (FileNotFoundError, OSError):
+            return False
+    return False
+
+
+def _pr_exists_for_branch(branch: str, repo: str) -> bool:
+    """Return True if at least one open PR targets ``branch`` in ``repo``.
+
+    Shells to ``gh pr list`` — consistent with ``GhCliClient`` and
+    ``ship_recovery``.  Returns False on any error so the caller
+    degrades gracefully.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "gh", "pr", "list",
+                "--repo", repo,
+                "--head", branch,
+                "--state", "open",
+                "--json", "number",
+                "--limit", "1",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return False
+        import json as _json
+        items = _json.loads(proc.stdout.strip() or "[]")
+        return bool(items)
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+
+
+def _maybe_upgrade_to_success(
+    result: DispatchResult,
+    worktree_path: Path,
+    branch: str,
+    repo: str,
+    *,
+    # Injectable for tests — default to production implementations.
+    _check_commits: Callable[[Path, str], bool] = _branch_has_commits_ahead,
+    _check_pr: Callable[[str, str], bool] = _pr_exists_for_branch,
+) -> DispatchResult:
+    """Upgrade a FAILED result to SUCCESS when the work clearly landed.
+
+    Condition: classification is FAILED **and** the branch has commits
+    ahead of origin **and** a PR already exists.  Both checks must pass
+    to avoid promoting genuine failures (no commits = worker never
+    shipped; no PR = git push may have failed too).
+
+    Returns a new ``DispatchResult`` with classification overridden to
+    ``SUCCESS`` and a note in the trailing_line field; all other fields
+    are unchanged.
+    """
+    if result.classification is not Classification.FAILED:
+        return result
+
+    has_commits = _check_commits(worktree_path, branch)
+    has_pr = _check_pr(branch, repo)
+
+    if not (has_commits and has_pr):
+        return result
+
+    logger.info(
+        "dispatch: upgrading FAILED→SUCCESS for branch %s "
+        "(branch ahead of origin, PR exists; likely post-success exit quirk)",
+        branch,
+    )
+
+    note = (
+        f"[oxi] exit-code non-zero but branch {branch!r} is ahead of origin "
+        f"and a PR exists — reclassified as SUCCESS"
+    )
+    return DispatchResult(
+        classification=Classification.SUCCESS,
+        exit_code=result.exit_code,
+        session_id=result.session_id,
+        events=result.events,
+        trailing_line=note,
+        stderr_text=result.stderr_text,
+        cost_usd=result.cost_usd,
+        wall_clock_seconds=result.wall_clock_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +397,10 @@ async def dispatch_one(
     binary: str = "claude",
     anthropic_api_key: str | None = None,
     extra_env: dict[str, str] | None = None,
+    # Injectable for tests: override the two checks inside
+    # _maybe_upgrade_to_success without needing a real git remote or gh CLI.
+    _check_commits: Callable[[Path, str], bool] | None = None,
+    _check_pr: Callable[[str, str], bool] | None = None,
 ) -> DispatchResult | None:
     """Dispatch the next planned task, or return None if nothing to do.
 
@@ -278,6 +411,9 @@ async def dispatch_one(
     Raises on infrastructure failures (worktree provisioning error,
     missing adapter). Does not raise on claude failures — those are
     captured in the DispatchResult's classification.
+
+    The ``_check_commits`` and ``_check_pr`` parameters are for testing
+    only; production callers should leave them as None (defaults apply).
     """
     if engine_state.is_stopping():
         logger.info("dispatch: engine stopping, skipping tick")
@@ -332,6 +468,20 @@ async def dispatch_one(
     _transition_to_dispatched(conn, task.id, session_id)
 
     result = await invoke(invocation)
+
+    # False-failure relaxation (T1-15): if claude exited non-zero but
+    # the branch already has commits ahead of origin AND a PR exists,
+    # the exit most likely came from a post-success hook or a
+    # gh-pr-create quirk. Upgrade to SUCCESS so pr_watcher takes over.
+    upgrade_kwargs: dict = {}
+    if _check_commits is not None:
+        upgrade_kwargs["_check_commits"] = _check_commits
+    if _check_pr is not None:
+        upgrade_kwargs["_check_pr"] = _check_pr
+    repo = adapter.github_repo()
+    result = _maybe_upgrade_to_success(
+        result, handle.path, handle.branch, repo, **upgrade_kwargs
+    )
 
     _record_outcome(conn, task.id, result)
 
@@ -401,6 +551,9 @@ def _pick_model(adapter: Adapter) -> str:
 __all__ = [
     "DEFAULT_SESSION_TAG",
     "Task",
+    "_branch_has_commits_ahead",
+    "_maybe_upgrade_to_success",
+    "_pr_exists_for_branch",
     "dispatch_loop",
     "dispatch_one",
     "is_orphan_reapable",

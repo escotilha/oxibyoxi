@@ -25,10 +25,13 @@ from oxi_core.adapter import (
 )
 from oxi_core.v3.dispatch import (
     Task,
+    _branch_has_commits_ahead,
+    _maybe_upgrade_to_success,
     dispatch_loop,
     dispatch_one,
     is_orphan_reapable,
 )
+from oxi_core.v3.dispatch_invoke import Classification, DispatchResult
 from oxi_core.v3.engine_state import EngineState
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -578,3 +581,221 @@ async def test_dispatch_creates_a_worktree_for_the_task(environment, monkeypatch
 def test_python_version():
     import sys
     assert sys.version_info >= (3, 11)
+
+
+# ---------------------------------------------------------------------------
+# T1-15: false-failure relaxation (_maybe_upgrade_to_success)
+# ---------------------------------------------------------------------------
+
+
+def _failed_result(session_id: str = "test-sid") -> DispatchResult:
+    """Return a minimal FAILED DispatchResult for unit-testing the upgrade logic."""
+    return DispatchResult(
+        classification=Classification.FAILED,
+        exit_code=1,
+        session_id=session_id,
+    )
+
+
+def test_maybe_upgrade_noop_when_no_commits(tmp_path):
+    """No commits ahead → stay FAILED even if a PR exists."""
+    result = _failed_result()
+    upgraded = _maybe_upgrade_to_success(
+        result,
+        worktree_path=tmp_path,
+        branch="feat/oxi-t0-1",
+        repo="owner/repo",
+        _check_commits=lambda _p, _b: False,   # branch NOT ahead
+        _check_pr=lambda _b, _r: True,          # PR exists
+    )
+    assert upgraded.classification is Classification.FAILED
+
+
+def test_maybe_upgrade_noop_when_no_pr(tmp_path):
+    """Commits ahead but no PR → stay FAILED (push succeeded, PR open failed)."""
+    result = _failed_result()
+    upgraded = _maybe_upgrade_to_success(
+        result,
+        worktree_path=tmp_path,
+        branch="feat/oxi-t0-1",
+        repo="owner/repo",
+        _check_commits=lambda _p, _b: True,    # branch IS ahead
+        _check_pr=lambda _b, _r: False,         # no PR
+    )
+    assert upgraded.classification is Classification.FAILED
+
+
+def test_maybe_upgrade_succeeds_when_both_conditions_met(tmp_path):
+    """Branch ahead AND PR exists → upgrade to SUCCESS."""
+    result = _failed_result()
+    upgraded = _maybe_upgrade_to_success(
+        result,
+        worktree_path=tmp_path,
+        branch="feat/oxi-t0-1",
+        repo="owner/repo",
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: True,
+    )
+    assert upgraded.classification is Classification.SUCCESS
+    # Original fields preserved.
+    assert upgraded.exit_code == 1
+    assert upgraded.session_id == "test-sid"
+    # A note is embedded in trailing_line.
+    assert upgraded.trailing_line is not None
+    assert "reclassified" in upgraded.trailing_line
+
+
+def test_maybe_upgrade_noop_for_success_result(tmp_path):
+    """Already-SUCCESS results pass through unchanged."""
+    result = DispatchResult(
+        classification=Classification.SUCCESS,
+        exit_code=0,
+        session_id="sid",
+    )
+    upgraded = _maybe_upgrade_to_success(
+        result,
+        worktree_path=tmp_path,
+        branch="feat/oxi-t0-1",
+        repo="owner/repo",
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: True,
+    )
+    assert upgraded is result  # unchanged, same object
+
+
+def test_maybe_upgrade_noop_for_timeout_result(tmp_path):
+    """TIMEOUT results are not upgraded (wall-clock killed, not post-success quirk)."""
+    result = DispatchResult(
+        classification=Classification.TIMEOUT,
+        exit_code=None,
+        session_id="sid",
+    )
+    upgraded = _maybe_upgrade_to_success(
+        result,
+        worktree_path=tmp_path,
+        branch="feat/oxi-t0-1",
+        repo="owner/repo",
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: True,
+    )
+    assert upgraded.classification is Classification.TIMEOUT
+
+
+def test_maybe_upgrade_noop_for_retryable_result(tmp_path):
+    """RETRYABLE_TRANSIENT results are not upgraded."""
+    result = DispatchResult(
+        classification=Classification.RETRYABLE_TRANSIENT,
+        exit_code=143,
+        session_id="sid",
+    )
+    upgraded = _maybe_upgrade_to_success(
+        result,
+        worktree_path=tmp_path,
+        branch="feat/oxi-t0-1",
+        repo="owner/repo",
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: True,
+    )
+    assert upgraded.classification is Classification.RETRYABLE_TRANSIENT
+
+
+def test_branch_has_commits_ahead_returns_false_on_bad_path(tmp_path):
+    """Graceful degradation: non-git dir returns False, not an exception."""
+    result = _branch_has_commits_ahead(tmp_path / "nonexistent", "feat/oxi-t0-1")
+    assert result is False
+
+
+def test_branch_has_commits_ahead_returns_false_on_fresh_clone(
+    upstream_and_clone, tmp_path
+):
+    """A branch at the same tip as origin should report False (no commits ahead)."""
+    _, clone = upstream_and_clone
+    # The default branch is at origin/main with no local commits ahead.
+    # We verify the function returns False (not an exception).
+    result = _branch_has_commits_ahead(clone, "main")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_exit_1_after_pr_upgrades_to_dispatched(environment):
+    """Full integration: exit-1-after-PR fake scenario → task stays dispatched.
+
+    The fake scenario exits 1 (simulating a post-success hook).
+    We inject _check_commits and _check_pr that both return True,
+    simulating the situation where the branch is ahead and a PR exists.
+    The task should end up ``dispatched`` (= SUCCESS outcome), not ``failed``.
+    """
+    env = environment
+    _seed_task(env["conn"])
+
+    await dispatch_one(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("exit_1_after_pr"),
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: True,
+    )
+
+    row = env["conn"].execute(
+        "SELECT status FROM task WHERE identifier = 'T0-1'"
+    ).fetchone()
+    assert row["status"] == "dispatched", (
+        "Task should stay dispatched when PR exists + branch ahead, "
+        "even if claude exited 1"
+    )
+
+
+@pytest.mark.asyncio
+async def test_exit_1_without_pr_marks_failed(environment):
+    """Exit-1 with no PR → real failure, should still mark task failed.
+
+    _check_pr returns False, so the upgrade is skipped.
+    """
+    env = environment
+    _seed_task(env["conn"])
+
+    await dispatch_one(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("exit_1_after_pr"),
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: False,   # no PR → real failure
+    )
+
+    row = env["conn"].execute(
+        "SELECT status FROM task WHERE identifier = 'T0-1'"
+    ).fetchone()
+    assert row["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_upgrade_emits_dispatch_succeeded_event(environment):
+    """When upgrade happens the ledger event kind must be dispatch_succeeded."""
+    env = environment
+    task_id = _seed_task(env["conn"])
+
+    await dispatch_one(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("exit_1_after_pr"),
+        _check_commits=lambda _p, _b: True,
+        _check_pr=lambda _b, _r: True,
+    )
+
+    kinds = [
+        row[0]
+        for row in env["conn"].execute(
+            "SELECT kind FROM event WHERE task_id = ? ORDER BY id", (task_id,)
+        )
+    ]
+    assert "dispatch_succeeded" in kinds
+    assert "dispatch_failed" not in kinds

@@ -241,6 +241,28 @@ def scenario_critic_garbage(session_id: str) -> int:
     return 0
 
 
+def scenario_exit_1_after_pr(session_id: str) -> int:
+    """Simulate a post-success exit-1 (pre-commit hook tail or gh pr create quirk).
+
+    The worker committed, pushed, and opened a PR successfully, but the
+    process exited non-zero at the very end (e.g. a pre-commit hook's
+    trailing stderr, or gh pr create returning 1 despite opening the PR).
+
+    Dispatchers that only look at the exit code misclassify this as
+    FAILED. The false-failure relaxation in dispatch.py should upgrade
+    it to SUCCESS when the branch is ahead of origin and a PR exists.
+    """
+    _emit(_init_event(session_id))
+    _emit(_assistant_event(
+        "Committed, pushed, and opened PR. Exiting with pre-commit hook noise.",
+        session_id,
+    ))
+    # No result event — consistent with real claude exiting non-zero before
+    # the framework emits a result.
+    sys.stderr.write("fake_claude: pre-commit hook exited 1 (noise)\n")
+    return 1
+
+
 SCENARIOS: dict[str, callable] = {
     "happy": scenario_happy,
     "rate_limit_retry_ok": scenario_rate_limit_retry_ok,
@@ -254,6 +276,7 @@ SCENARIOS: dict[str, callable] = {
     "critic_approve": scenario_critic_approve,
     "critic_reject": scenario_critic_reject,
     "critic_garbage": scenario_critic_garbage,
+    "exit_1_after_pr": scenario_exit_1_after_pr,
 }
 
 
