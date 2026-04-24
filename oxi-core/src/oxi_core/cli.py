@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -236,12 +237,19 @@ def _run_real_claude_tick(conn, state, adapter) -> None:
     repo_root_str = adapter.paths().repo_root or "."
     repo_root = Path(repo_root_str)
 
+    # Read ANTHROPIC_API_KEY from the supervisor's env and hand it
+    # explicitly to dispatch. The dispatch_invoke env whitelist would
+    # otherwise strip it, leaving workers with no credentials. This is
+    # the one secret we intentionally allow across the boundary.
+    anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+
     result = asyncio.run(
         dispatch.dispatch_one(
             conn=conn,
             adapter=adapter,
             engine_state=state,
             repo_root=repo_root,
+            anthropic_api_key=anthropic_api_key,
         )
     )
     if result is not None:

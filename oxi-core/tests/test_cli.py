@@ -239,6 +239,99 @@ def test_tick_runs_heartbeat_without_crashing(_env, capsys):
 
 
 # ---------------------------------------------------------------------------
+# ANTHROPIC_API_KEY plumbing
+# ---------------------------------------------------------------------------
+
+
+def test_real_claude_tick_passes_anthropic_api_key_from_env(
+    _env, monkeypatch, capsys,
+):
+    """cmd_tick --real-claude must forward ANTHROPIC_API_KEY to dispatch.
+
+    The dispatch_invoke env whitelist strips everything not explicitly
+    passed. If the CLI doesn't plumb the key, the worker spawns with no
+    credentials and fails in under a second. That was the first bug the
+    dogfood loop caught.
+    """
+    import asyncio
+
+    from oxi_core.v3 import dispatch
+
+    captured: dict = {}
+
+    async def _fake_dispatch_one(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-cli-plumbing-sentinel")
+    monkeypatch.setattr(dispatch, "dispatch_one", _fake_dispatch_one)
+
+    # pr_watcher + auto_merge call downstream; stub them to no-ops so we
+    # only observe the dispatch path.
+    from oxi_core.v3 import auto_merge, pr_watcher
+
+    class _EmptyReport:
+        pr_numbers_stamped = 0
+        tasks_transitioned_merged = 0
+        tasks_transitioned_failed = 0
+        considered = 0
+        merged = 0
+        critic_rejected = 0
+
+    monkeypatch.setattr(pr_watcher, "watch", lambda *a, **k: _EmptyReport())
+    monkeypatch.setattr(auto_merge, "run", lambda *a, **k: _EmptyReport())
+    # Prevent asyncio.run nesting issues when tests run under a loop.
+    def _sync_run(coro):
+        return asyncio.new_event_loop().run_until_complete(coro)
+    monkeypatch.setattr(asyncio, "run", _sync_run)
+
+    rc = main(["v3", "tick", "--real-claude", "--times", "1"])
+    assert rc == 0
+    assert captured.get("anthropic_api_key") == "sk-ant-test-cli-plumbing-sentinel"
+
+
+def test_real_claude_tick_passes_none_when_env_missing(
+    _env, monkeypatch, capsys,
+):
+    """If ANTHROPIC_API_KEY is absent, pass None (not an empty string).
+
+    Preserves the dispatch_one contract: the dispatch layer decides what
+    to do with a missing key (today it proceeds and lets claude fail
+    fast with an auth error).
+    """
+    import asyncio
+
+    from oxi_core.v3 import auto_merge, dispatch, pr_watcher
+
+    captured: dict = {}
+
+    async def _fake_dispatch_one(**kwargs):
+        captured.update(kwargs)
+        return None
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(dispatch, "dispatch_one", _fake_dispatch_one)
+
+    class _EmptyReport:
+        pr_numbers_stamped = 0
+        tasks_transitioned_merged = 0
+        tasks_transitioned_failed = 0
+        considered = 0
+        merged = 0
+        critic_rejected = 0
+
+    monkeypatch.setattr(pr_watcher, "watch", lambda *a, **k: _EmptyReport())
+    monkeypatch.setattr(auto_merge, "run", lambda *a, **k: _EmptyReport())
+    def _sync_run(coro):
+        return asyncio.new_event_loop().run_until_complete(coro)
+    monkeypatch.setattr(asyncio, "run", _sync_run)
+
+    rc = main(["v3", "tick", "--real-claude", "--times", "1"])
+    assert rc == 0
+    assert captured.get("anthropic_api_key") is None
+
+
+# ---------------------------------------------------------------------------
 # Unknown command
 # ---------------------------------------------------------------------------
 
