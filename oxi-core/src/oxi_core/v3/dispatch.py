@@ -57,6 +57,7 @@ from .dispatch_invoke import (
     invoke,
 )
 from .engine_state import EngineState
+from .ledger_events import LedgerEvent
 from .worktree_provision import WorktreeError, provision
 
 logger = logging.getLogger(__name__)
@@ -311,7 +312,7 @@ def _transition_to_dispatched(
             "INSERT INTO event (task_id, kind, payload) VALUES (?, ?, ?)",
             (
                 task_id,
-                "dispatch_started",
+                LedgerEvent.DISPATCH_STARTED,
                 json.dumps({"session_id": session_id}),
             ),
         )
@@ -335,16 +336,16 @@ def _record_outcome(
     now = _now_iso()
     if result.classification is Classification.SUCCESS:
         new_status = "dispatched"
-        event_kind = "dispatch_succeeded"
+        event_kind = LedgerEvent.DISPATCH_SUCCEEDED
     elif result.classification is Classification.RETRYABLE_TRANSIENT:
         new_status = "planned"
-        event_kind = "dispatch_retryable"
+        event_kind = LedgerEvent.DISPATCH_RETRYABLE
     elif result.classification is Classification.TIMEOUT:
         new_status = "abandoned"
-        event_kind = "dispatch_timeout"
+        event_kind = LedgerEvent.DISPATCH_TIMEOUT
     else:  # FAILED
         new_status = "failed"
-        event_kind = "dispatch_failed"
+        event_kind = LedgerEvent.DISPATCH_FAILED
 
     payload = {
         "session_id": result.session_id,

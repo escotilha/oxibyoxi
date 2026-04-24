@@ -33,6 +33,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .ledger_events import LedgerEvent
+
 logger = logging.getLogger(__name__)
 
 
@@ -169,7 +171,7 @@ def write_snapshot(
             "INSERT INTO event (task_id, kind, payload) VALUES (?, ?, ?)",
             (
                 task_id,
-                "handoff_written",
+                LedgerEvent.HANDOFF_WRITTEN,
                 json.dumps({
                     "path": str(out_path),
                     "pruned": [str(p) for p in pruned],
