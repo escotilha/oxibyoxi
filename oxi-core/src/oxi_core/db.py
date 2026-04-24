@@ -118,12 +118,37 @@ CREATE INDEX IF NOT EXISTS idx_task_pr_number ON task(pr_number);
 """
 
 
+# Version 3: extend `front` to be the roadmap-item projection used by
+# ingest_roadmap + seed_from_roadmap. Adds:
+#   - identifier (T0-1, T1-7, ...): the roadmap's stable key
+#   - tier (int): roadmap tier (0, 1, 2, ...)
+#   - title (text): human-readable title
+#   - subtitle (text): optional one-liner
+#   - last_seeded_at (text): ISO timestamp of last task seeded from this front
+#   - cooldown_hours (real): minimum hours between reseeds
+# Keeps the existing columns (name/description/weight/active) unchanged.
+#
+# `identifier` is nullable because pre-migration rows (if any) don't
+# have it. After migration, seeding code always populates it.
+MIGRATION_V3_FRONT_ROADMAP: str = """
+ALTER TABLE front ADD COLUMN identifier TEXT;
+ALTER TABLE front ADD COLUMN tier INTEGER NOT NULL DEFAULT 99;
+ALTER TABLE front ADD COLUMN title TEXT NOT NULL DEFAULT '';
+ALTER TABLE front ADD COLUMN subtitle TEXT NOT NULL DEFAULT '';
+ALTER TABLE front ADD COLUMN last_seeded_at TEXT;
+ALTER TABLE front ADD COLUMN cooldown_hours REAL NOT NULL DEFAULT 24.0;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_front_identifier ON front(identifier);
+CREATE INDEX IF NOT EXISTS idx_front_tier_last_seeded ON front(tier, last_seeded_at);
+"""
+
+
 # Migration list — append-only. Each (version, sql) pair runs in order if
 # not already recorded in schema_migrations. Do NOT edit applied migrations;
 # add a new one instead.
 MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, SCHEMA_SQL),
     (2, MIGRATION_V2_PR_NUMBER),
+    (3, MIGRATION_V3_FRONT_ROADMAP),
 )
 
 
