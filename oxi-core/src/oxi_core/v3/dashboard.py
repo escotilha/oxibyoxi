@@ -55,11 +55,27 @@ def _render_failures(failures: list[tuple[str, str, str]]) -> str:
     return "".join(parts)
 
 
+def _recovered_task_ids(conn: sqlite3.Connection) -> set[int]:
+    """Return task IDs that have at least one ``auto_recover_attempted`` event.
+
+    Used to annotate recovered tasks in the dashboard so operators can
+    distinguish a retry from a first-run dispatch at a glance.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT task_id FROM event WHERE kind = 'auto_recover_attempted'"
+    ).fetchall()
+    return {row[0] for row in rows}
+
+
 def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
     """Render the dashboard HTML for the current DB state.
 
     Self-contained: no external CSS/JS, no images. One file, one
     response.
+
+    Tasks that have been through ``auto_recover`` receive a
+    ``[retry]`` badge in the id column so operators can immediately
+    distinguish recovered dispatches from first-runs.
     """
     adapter = get_active_adapter()
     instance = adapter.naming().instance_name
@@ -72,25 +88,35 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
         for s, n in sorted(brief.status_counts.items())
     ) or "<tr><td colspan=2><em>no tasks</em></td></tr>"
 
+    # Collect recovered task IDs for badge rendering.
+    recovered_ids = _recovered_task_ids(conn)
+
     recent_tasks = [
-        (row["identifier"], row["title"], row["status"],
+        (row["id"], row["identifier"], row["title"], row["status"],
          row["pr_number"], row["last_progress_at"])
         for row in conn.execute(
-            "SELECT identifier, title, status, pr_number, last_progress_at "
+            "SELECT id, identifier, title, status, pr_number, last_progress_at "
             "FROM task ORDER BY updated_at DESC LIMIT 50"
         )
     ]
-    task_rows = "".join(
-        "<tr>"
-        f"<td><code>{html.escape(ident)}</code></td>"
-        f"<td>{html.escape(title)}</td>"
-        f"<td>{html.escape(status)}</td>"
-        # pr is INTEGER in schema but forks may relax it; escape defensively.
-        f"<td>{html.escape(str(pr)) if pr is not None else ''}</td>"
-        f"<td>{html.escape(last_progress or '')}</td>"
-        "</tr>"
-        for ident, title, status, pr, last_progress in recent_tasks
-    ) or "<tr><td colspan=5><em>no tasks</em></td></tr>"
+    task_rows_parts = []
+    for task_id, ident, title, status, pr, last_progress in recent_tasks:
+        retry_badge = (
+            ' <span class="retry-badge" title="recovered by auto_recover">[retry]</span>'
+            if task_id in recovered_ids
+            else ""
+        )
+        task_rows_parts.append(
+            "<tr>"
+            f"<td><code>{html.escape(ident)}</code>{retry_badge}</td>"
+            f"<td>{html.escape(title)}</td>"
+            f"<td>{html.escape(status)}</td>"
+            # pr is INTEGER in schema but forks may relax it; escape defensively.
+            f"<td>{html.escape(str(pr)) if pr is not None else ''}</td>"
+            f"<td>{html.escape(last_progress or '')}</td>"
+            "</tr>"
+        )
+    task_rows = "".join(task_rows_parts) or "<tr><td colspan=5><em>no tasks</em></td></tr>"
 
     now = datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     return f"""<!doctype html>
@@ -108,6 +134,17 @@ th {{ background: #f5f5f5; }}
 code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
 .summary {{ display: flex; gap: 2rem; }}
 .summary > div {{ flex: 1; }}
+.retry-badge {{
+  display: inline-block;
+  margin-left: 0.3rem;
+  padding: 0 0.3rem;
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 3px;
+  font-size: 0.75em;
+  color: #856404;
+  vertical-align: middle;
+}}
 </style>
 </head>
 <body>
@@ -228,3 +265,6 @@ __all__ = [
     "render_html",
     "serve",
 ]
+
+# _recovered_task_ids is intentionally not in __all__ — it is an
+# internal query helper.  Tests that need it import it directly.

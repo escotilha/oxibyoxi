@@ -218,6 +218,9 @@ class Task:
     last_progress_at: str | None
     created_at: str
     updated_at: str
+    # Optional columns — present in the schema but not always populated.
+    failed_at: str | None = None
+    failure_reason: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Task:
@@ -233,6 +236,8 @@ class Task:
             last_progress_at=row["last_progress_at"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            failed_at=_safe_column(row, "failed_at"),
+            failure_reason=_safe_column(row, "failure_reason"),
         )
 
     def as_roadmap_item(self) -> RoadmapItem:
@@ -256,6 +261,18 @@ def _safe_pr_number(row: sqlite3.Row) -> int | None:
     """
     try:
         return row["pr_number"]
+    except (IndexError, KeyError):
+        return None
+
+
+def _safe_column(row: sqlite3.Row, column: str) -> str | None:
+    """Return ``row[column]`` if the column exists, else None.
+
+    Mirrors ``_safe_pr_number`` for other optional columns that may be
+    absent in older schema versions or adapter-provided DBs.
+    """
+    try:
+        return row[column]
     except (IndexError, KeyError):
         return None
 

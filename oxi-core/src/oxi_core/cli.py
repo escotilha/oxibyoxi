@@ -228,11 +228,12 @@ def cmd_tick(args: argparse.Namespace) -> int:
     else:
         print(f"oxi: tick --times {args.times} (reconciliation-only)")
 
-    from .v3 import heartbeat
+    from .v3 import auto_recover, heartbeat
 
     handle = connect()
     try:
         total_abandoned = 0
+        total_recovered = 0
         for _ in range(args.times):
             if state.is_stopping():
                 break
@@ -245,9 +246,22 @@ def cmd_tick(args: argparse.Namespace) -> int:
                     f"protected_by_pr={report.protected_by_pr} "
                     f"fresh={report.skipped_fresh}"
                 )
+
+            rec_report = auto_recover.run(handle.connection, state)
+            total_recovered += rec_report.recovered
+            if rec_report.recovered or rec_report.exhausted:
+                print(
+                    f"  auto_recover: recovered={rec_report.recovered} "
+                    f"exhausted={rec_report.exhausted} "
+                    f"skipped_cooldown={rec_report.skipped_cooldown}"
+                )
+
             if args.real_claude:
                 _run_real_claude_tick(handle.connection, state, adapter)
-        print(f"oxi: tick done. abandoned={total_abandoned}")
+        print(
+            f"oxi: tick done. abandoned={total_abandoned} "
+            f"auto_recovered={total_recovered}"
+        )
     finally:
         handle.connection.close()
     return 0
