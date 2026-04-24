@@ -77,6 +77,8 @@ EXEMPT_FILES=(
   "docs/anti-patterns.md"
   "docs/post-mortems"       # reserved for future external-incident citations
   "docs/release-notes"      # reserved for CVE/upstream citations
+  "oxi-core/src/oxi_core/v3/spec_ingest.py"  # contains the forbidden-string list to enforce against
+  "oxi-core/tests/test_spec_ingest.py"       # exercises the forbidden-string enforcement
 )
 
 # Paths to ignore during scan (binary, generated, or vendored content).
