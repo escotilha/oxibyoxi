@@ -255,8 +255,11 @@ def test_cli_plan_dry_run_no_adapter_exits_2(capsys):
     with pytest.raises(SystemExit) as exc:
         main(["v3", "plan", "--dry-run"])
     assert exc.value.code == 2
-    err = capsys.readouterr().err
-    assert "no adapter" in err.lower()
+    err = capsys.readouterr().err.lower()
+    # CI has multiple adapters installed → "multiple adapters";
+    # dev with only one → "no adapter". Both are registration
+    # errors that exit 2.
+    assert "no adapter" in err or "multiple adapters" in err
 
 
 def test_cli_plan_without_dry_run_flag_fails(tmp_path: Path, capsys):
