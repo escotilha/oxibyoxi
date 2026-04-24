@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "oxi-core"
-version = "0.1.0a5"
+version = "0.1.0b1"
 description = "Standalone, forkable autonomous coding orchestrator."
 readme = "README.md"
 license = { text = "MIT" }
@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [{ name = "escotilha" }]
 keywords = ["orchestrator", "automation", "ci", "claude-code"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
