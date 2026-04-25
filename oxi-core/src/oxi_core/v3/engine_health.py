@@ -55,6 +55,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, cast
 
 from ._timefmt import now_iso as _now_iso
 
@@ -330,10 +331,10 @@ def is_engine_unhealthy_from_db(conn: sqlite3.Connection) -> bool:
     ).fetchone()
     if row is None:
         return False
-    return row[0] == EVENT_KIND_UNHEALTHY
+    return bool(row[0] == EVENT_KIND_UNHEALTHY)
 
 
-def get_last_unhealthy_event(conn: sqlite3.Connection) -> dict | None:
+def get_last_unhealthy_event(conn: sqlite3.Connection) -> dict[str, Any] | None:
     """Return the payload of the most recent ``engine_unhealthy`` event, or None."""
     row = conn.execute(
         "SELECT payload, created_at FROM event WHERE kind = ? ORDER BY id DESC LIMIT 1",
@@ -341,8 +342,9 @@ def get_last_unhealthy_event(conn: sqlite3.Connection) -> dict | None:
     ).fetchone()
     if row is None:
         return None
+    payload: dict[str, Any]
     try:
-        payload = json.loads(row["payload"] or "{}")
+        payload = cast(dict[str, Any], json.loads(row["payload"] or "{}"))
     except (TypeError, ValueError):
         payload = {}
     payload["created_at"] = row["created_at"]

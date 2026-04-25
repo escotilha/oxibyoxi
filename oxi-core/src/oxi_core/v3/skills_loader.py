@@ -40,6 +40,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class SkillMetadata:
     user_invocable: bool = False
     model: str = ""
     tags: tuple[str, ...] = field(default_factory=tuple)
-    raw: dict = field(default_factory=dict)
+    raw: dict[str, Any] = field(default_factory=dict)
 
     @property
     def root(self) -> Path:
@@ -78,7 +79,7 @@ _FRONTMATTER_RE = re.compile(
 )
 
 
-def _parse_frontmatter(text: str) -> tuple[dict, str]:
+def _parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     """Split ``---\\n...\\n---\\n`` frontmatter from body.
 
     Returns ``(fields, body)``. Missing frontmatter raises.
@@ -87,7 +88,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     if match is None:
         raise SkillParseError("missing '---' frontmatter delimiters")
 
-    fields: dict = {}
+    fields: dict[str, Any] = {}
     current_list_key: str | None = None
     current_list: list[str] = []
 
@@ -134,7 +135,7 @@ def _parse_frontmatter(text: str) -> tuple[dict, str]:
     return fields, match.group("body")
 
 
-def _coerce_value(value: str):
+def _coerce_value(value: str) -> bool | str:
     """Turn a raw frontmatter value into a bool / string / stripped-quote string."""
     lowered = value.lower()
     if lowered in ("true", "yes"):
@@ -149,7 +150,7 @@ def _coerce_value(value: str):
     return value
 
 
-def _require(fields: dict, key: str, path: Path) -> str:
+def _require(fields: dict[str, Any], key: str, path: Path) -> str:
     v = fields.get(key)
     if not isinstance(v, str) or not v.strip():
         raise SkillParseError(

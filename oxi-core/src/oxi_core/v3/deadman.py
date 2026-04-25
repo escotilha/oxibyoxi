@@ -30,6 +30,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from .engine_state import EngineState
 from .notification import Level, Notification, NotificationBackend
@@ -119,7 +120,7 @@ def _already_notified_within(
 def _emit_deadman_event(
     conn: sqlite3.Connection,
     level: Level,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> None:
     import json
     with conn:
@@ -230,7 +231,7 @@ def run(
         )
 
     # Compose the notification and dispatch it.
-    tags = ("deadman",)
+    tags: tuple[str, ...] = ("deadman",)
     if budget_hard_stop:
         tags = tags + ("budget",)
 

@@ -27,6 +27,7 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -41,10 +42,10 @@ class ParsedEvent:
     subtype: str          # for system events, e.g. "init" / "api_retry"
     session_id: str       # echoes claude's session UUID
     text: str             # best-effort one-line summary
-    raw: dict
+    raw: dict[str, Any]
 
 
-def _summary_from_raw(evt: dict) -> str:
+def _summary_from_raw(evt: dict[str, Any]) -> str:
     """Derive a one-line summary from a stream-json event.
 
     Strategy: prefer the first text block if there is one, else the

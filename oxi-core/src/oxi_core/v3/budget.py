@@ -40,6 +40,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from typing import Any
 
 from ..adapter import get_active_adapter
 
@@ -111,7 +112,7 @@ def _warn_event_exists_today(
 def _emit_event(
     conn: sqlite3.Connection,
     kind: str,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> None:
     with conn:
         conn.execute(

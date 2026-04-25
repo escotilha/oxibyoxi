@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from typing import Any, cast
 
 from .notification import Level, Notification, NotificationBackend
 
@@ -72,7 +73,7 @@ class OAuthStatus:
     notified: bool
 
 
-def _read_credentials(path: Path) -> dict | None:
+def _read_credentials(path: Path) -> dict[str, Any] | None:
     """Load the credentials file into a dict, or return None.
 
     Missing file → None. JSON parse errors → None.
@@ -80,12 +81,12 @@ def _read_credentials(path: Path) -> dict | None:
     if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast(dict[str, Any], json.loads(path.read_text(encoding="utf-8")))
     except (OSError, json.JSONDecodeError):
         return None
 
 
-def _extract_expiry(creds: dict) -> datetime | None:
+def _extract_expiry(creds: dict[str, Any]) -> datetime | None:
     """Extract the expiry timestamp from common credential shapes.
 
     Returns None for unrecognized shapes. Never raises.
@@ -186,7 +187,7 @@ def _already_notified_within(
 def _emit_event(
     conn: sqlite3.Connection,
     status: Status,
-    payload: dict,
+    payload: dict[str, Any],
 ) -> None:
     with conn:
         conn.execute(
