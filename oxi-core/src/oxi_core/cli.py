@@ -79,10 +79,13 @@ def _require_adapter() -> None:
         get_active_adapter()
     except AdapterNotRegisteredError as exc:
         _print_err(
-            "oxi: no adapter registered. Install an adapter package that "
-            "declares [project.entry-points.\"oxi.adapters\"] in its "
-            "pyproject.toml, or set OXI_ADAPTER=module:ClassName.\n"
-            "  See adapters/_reference for an example.\n  " + str(exc)
+            "oxi: no adapter registered. Options:\n"
+            "  1. Add an oxi.toml with [adapter] class = \"module:ClassName\" "
+            "to the repo root (recommended for launchd/systemd).\n"
+            "  2. Install an adapter package that declares "
+            "[project.entry-points.\"oxi.adapters\"] in its pyproject.toml.\n"
+            "  3. Set OXI_ADAPTER=module:ClassName in the environment.\n"
+            "  See adapters/_reference for an example adapter.\n  " + str(exc)
         )
         raise SystemExit(2) from exc
 
