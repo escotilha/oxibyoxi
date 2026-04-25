@@ -4,7 +4,55 @@
 
 oxi turns `roadmap.md` into shipped code. Each tick: it picks the next planned task, spawns a `claude -p` session in a fresh git worktree, watches the worker open a PR, runs a second-model critic on the diff, and merges (or rejects) according to your policy. Every guardrail you'd want — budget hard-cap, killswitch, heartbeat reaper, ship-recovery, prompt-injection isolation, parameterized SQL, env-whitelisted subprocess — is on by default.
 
-You write a ~70-line adapter that tells oxi about your project (repo, budget, plan tier). Core has zero strings naming any specific project. Forking is `pip install --pre oxi-core && oxi init`.
+<!-- Screenshot of `oxi v3 tick --real-claude` shipping a PR. Captured by an
+operator on a real run; this slot reserves layout so the README's first
+visual is a proof-by-screenshot, not prose. See docs/assets/README.md. -->
+
+![oxi v3 tick — engine shipping a PR end-to-end](docs/assets/oxi-tick-screenshot.png)
+
+## Before / after
+
+Two terminals, same `roadmap.md`.
+
+```text
+─── before ────────────────────────────────────────────
+$ cat roadmap.md
+**T0-1 · add a greet function**
+**T0-2 · add a changelog stub**
+**T1-1 · expose greet in __all__**
+
+$ gh pr list --state merged
+(no merged PRs)
+
+$ git log --oneline -1
+8b3a2c1 chore: scaffold project
+```
+
+```text
+─── after ─────────────────────────────────────────────
+$ oxi v3 tick --real-claude --times 3
+── tick 1/3 · 14:22:10 · REAL CLAUDE ──
+  dispatch: classification=success cost=$0.31
+  pr_watcher: stamped=1 merged=1
+✓ tick done · merged=1
+
+── tick 2/3 · 14:24:42 · REAL CLAUDE ──
+  dispatch: classification=success cost=$0.27
+  pr_watcher: stamped=1 merged=1
+✓ tick done · merged=2
+
+── tick 3/3 · 14:26:01 · REAL CLAUDE ──
+  dispatch: classification=success cost=$0.18
+  pr_watcher: stamped=1 merged=1
+✓ tick done · merged=3
+
+$ gh pr list --state merged
+#42  feat: add greet function
+#43  docs: add changelog stub
+#44  feat: expose greet in __all__
+```
+
+## Install
 
 ```bash
 pip install --pre oxi-core      # beta — --pre still required while on 0.1.0b*
@@ -19,7 +67,7 @@ The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks
 
 **Status:** beta (`0.1.0b1` on PyPI). The engine built most of itself today via dogfood — 59 PRs merged, $20.15 of dispatch spend, every safety rail proven in production. See [release notes](docs/release-notes/v0.1.0b1.md) for what's in this cut.
 
-## What it does
+## How it works
 
 ```
 ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
@@ -34,12 +82,6 @@ The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks
 Every tick: planner reads your markdown roadmap, dispatch spawns `claude -p` in a git worktree, the worker opens a PR, pr_watcher tracks it, auto_merge runs a critic review, merge lands. Heartbeat rescues stalled sessions; ship_recovery rescues uncommitted work; budget enforcement prevents runaway spend; deadman shouts when the engine goes quiet.
 
 Every project-specific value — repo path, budget cap, plan tier, dispatch host — is behind an **adapter**. Your fork writes its own ~70-line adapter class; core is untouched.
-
-## Install
-
-```bash
-pip install oxi-core oxi-adapter-reference
-```
 
 ## Quick start
 
@@ -107,53 +149,13 @@ Every feature that spends money or changes state is gated:
 
 ## Architecture
 
-```
-oxi-core/                        # ships as `oxi-core` on PyPI
-├── src/oxi_core/
-│   ├── adapter.py              # 10-method Protocol every fork implements
-│   ├── cli.py                  # oxi, oxi init, oxi status, oxi v3 tick ...
-│   ├── db.py                   # SQLite schema + append-only migrations
-│   ├── planner.py              # roadmap → tasks
-│   ├── prompts.py              # templated planner/dispatch/critic prompts
-│   ├── wizard.py               # oxi init
-│   └── v3/
-│       ├── dispatch.py         # state-machine driver
-│       ├── dispatch_invoke.py  # claude -p subprocess wrapper
-│       ├── dispatch_pool.py    # host selection
-│       ├── heartbeat.py        # reaper for stalled tasks
-│       ├── ship_recovery.py    # rescue uncommitted work
-│       ├── pr_watcher.py       # reconcile DB with GitHub PR state
-│       ├── auto_merge.py       # critic-gated merge
-│       ├── critic.py           # CriticBackend + ClaudeCriticBackend
-│       ├── budget.py           # daily-cap enforcement
-│       ├── deadman.py          # silence detector
-│       ├── oauth_watch.py      # credential-expiry monitor
-│       ├── cto_verdict.py      # structured /cto report parser
-│       ├── notification.py     # pluggable notification backends
-│       ├── brief.py            # daily recap markdown
-│       ├── dashboard.py        # localhost HTTP dashboard
-│       ├── engine_state.py     # killswitch + plan_tier
-│       ├── kill.py             # killswitch file handling
-│       ├── worktree_provision.py   # git worktree lifecycle
-│       ├── github_client.py    # GitHubClient protocol + gh CLI impl
-│       ├── tail_dispatch.py    # live-tail stream-json logs
-│       ├── ingest_roadmap.py   # roadmap → fronts table
-│       └── seed_from_roadmap.py    # auto-replenish queue
-│
-└── tests/                       # 860+ tests, fake claude + fake GitHub
-
-adapters/
-├── _reference/                 # ships as `oxi-adapter-reference`; drives sample-project
-└── _template/                  # oxi init scaffolds from this
-
-sample-project/                 # throwaway fixture for end-to-end tests
-```
+The internals — adapter protocol, state machine, module layout, dependency graph — are documented in [`docs/architecture.md`](docs/architecture.md). The 5-minute summary: `oxi-core/` ships as `oxi-core` on PyPI; everything project-specific lives in adapters under `adapters/`; tests in `oxi-core/tests/` use a fake-claude + fake-GitHub harness so CI never touches real services.
 
 ## Design principles
 
 - **One binary, one command.** `oxi init`, then `oxi v3 tick`. No sprawling CLI surface.
 - **Everything project-specific lives in an adapter.** Core has zero strings naming any specific project.
-- **Fake the world in tests.** 860+ tests use `fake_claude.py` + `FakeGitHubClient`; no real Claude or GitHub contact in CI.
+- **Fake the world in tests.** 940+ tests use `fake_claude.py` + `FakeGitHubClient`; no real Claude or GitHub contact in CI.
 - **Atomic state transitions.** Every status update stamps `last_progress_at` in the same transaction. Reapers never trust `created_at`.
 - **Protocols over implementations.** `CriticBackend`, `GitHubClient`, `NotificationBackend` are pluggable. Forks substitute any of them.
 - **No premature abstraction.** Three similar lines beats one generic helper that handles three cases.
@@ -164,7 +166,7 @@ See [`docs/roadmap.md`](docs/roadmap.md) for current items. Phase 1 (engine), Ph
 
 ## Status
 
-**Beta** (`0.1.0b1`). The engine has dogfooded itself end-to-end — 59 PRs merged in one day with the engine writing ~40 of them, $20.15 of dispatch spend that hit the daily-hard-cap rail exactly as designed, full first-fork install path verified against PyPI from a fresh venv. 860+ tests pass against a fake-claude + fake-GitHub harness.
+**Beta** (`0.1.0b1`). The engine has dogfooded itself end-to-end — 59 PRs merged in one day with the engine writing ~40 of them, $20.15 of dispatch spend that hit the daily-hard-cap rail exactly as designed, full first-fork install path verified against PyPI from a fresh venv. 940+ tests pass against a fake-claude + fake-GitHub harness.
 
 The 0.1.0b* line commits to no breaking changes within minor. 0.2.0+ may break the adapter protocol; check release notes.
 
