@@ -1,0 +1,74 @@
+# routines/auto-improve.toml
+# Claude Code Routine — daily auto-improve scan for oxi.
+#
+# This Routine runs `scripts/auto_improve_routine.py` once per day at
+# 05:00 UTC.  It uses Anthropic Managed Agent Vaults for credential
+# injection — no tokens appear here or in any env file.
+#
+# See docs/plans/auto-improve-subsystem.md § B10 for the full design.
+#
+# Schema note (2026-04-25):
+#   Claude Code Routines is pre-GA.  The schema below follows the draft
+#   spec as of 2026-04-25.  If the GA schema differs, update this file
+#   and bump the comment date.  The `scripts/auto_improve_routine.py`
+#   entry point is schema-agnostic: it takes `--db` and `--dry-run`
+#   flags and reads credentials from the process environment, not from
+#   this file.
+#
+# Credential contract:
+#   - `ANTHROPIC_API_KEY` is injected by the Vault at runtime.  It never
+#     appears in this file.  The Vault name is `oxi-auto-improve`.
+#   - `GITHUB_TOKEN` is provided by the MCP GitHub tool reference below.
+#     The tool is authenticated separately; no secret is stored here.
+
+[routine]
+name        = "oxi-auto-improve"
+description = "Daily external-signal scan: fetch GitHub releases + newsletters, rank, judge, dedup, and emit candidate roadmap items to .oxi/auto-improve-digest-YYYY-MM-DD.md."
+schedule    = "0 5 * * *"   # 05:00 UTC daily
+
+[routine.run]
+# The entry-point script.  Path is relative to the repo root.
+command = "python scripts/auto_improve_routine.py"
+
+# Exit 0 is success (scan ran or was idempotently skipped).
+# Exit 1 is an error that the Routine dashboard should surface.
+success_exit_codes = [0]
+
+[routine.vault]
+# Anthropic Managed Agent Vault — injects ANTHROPIC_API_KEY into the
+# process environment at runtime.  The vault is configured out-of-band
+# by the operator; the name here is the lookup key.
+#
+# To provision:
+#   1. Go to console.anthropic.com → Agent Vaults
+#   2. Create a vault named "oxi-auto-improve"
+#   3. Add secret: key=ANTHROPIC_API_KEY, value=<your key>
+#   4. Associate this Routine with that vault
+#
+# No token is stored in this file.  Rotating the key requires only a
+# vault update — no code change.
+name = "oxi-auto-improve"
+
+[routine.tools]
+# MCP tool: GitHub — used by auto_external sources to fetch release feeds
+# and topic-query results.  Authentication is handled by the MCP tool's
+# own credential layer; no GITHUB_TOKEN appears here.
+#
+# When the full GitHub source (B2) is implemented, this tool reference
+# allows the Routine runner to make authenticated GitHub API calls.
+github = { provider = "github", scope = "read" }
+
+[routine.environment]
+# Static environment variables (non-secret).
+#
+# OXI_ADAPTER tells oxi which adapter to use.  For the dogfood loop this
+# is the self-adapter; forks override it with their own adapter class.
+OXI_ADAPTER = "oxi_adapter_self:SelfAdapter"
+
+# Disable color output so Routine log capture isn't cluttered with ANSI.
+NO_COLOR = "1"
+
+[routine.timeout]
+# Hard wall-clock timeout.  The scan pipeline is designed to complete in
+# < 5 minutes; 20 minutes is generous headroom for slow network fetches.
+minutes = 20

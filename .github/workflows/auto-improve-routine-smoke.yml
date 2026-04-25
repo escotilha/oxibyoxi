@@ -1,0 +1,94 @@
+# auto-improve-routine-smoke.yml — CI smoke test for T1-B10.
+#
+# Runs `scripts/auto_improve_routine.py` against a fixture SQLite DB and
+# asserts the script exits 0.  Also exercises the `--dry-run` flag and
+# the idempotency guard (second run exits 0 with a "skip" message).
+#
+# This job runs on every PR and push to main.  It does NOT require any
+# API keys — the auto_external pipeline is all stubs at this point (B2-B9
+# not yet implemented), so no LLM calls are made.
+#
+# Security review:
+#   - No ${{ github.event.* }} interpolation in run: blocks.
+#   - No secrets consumed.  ANTHROPIC_API_KEY is intentionally absent —
+#     the smoke test exercises the entry-point scaffolding only.
+#   - Static path arguments to the script; no dynamic input.
+#   - Script is invoked with an explicit --db flag pointing at a tmp file;
+#     no production DB is touched.
+
+name: auto-improve-routine-smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: routine entry-point smoke (fixture DB)
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install oxi-core
+        # Security review:
+        #   - No ${{ github.event.* }} interpolation.
+        #   - Installs static path target; no dynamic input.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./oxi-core[dev]"
+
+      - name: Run pytest (test_auto_improve_routine — unit + slow)
+        # Security review:
+        #   - Static pytest invocation with a fixed path.
+        #   - No secrets, no network, no LLM calls.
+        working-directory: oxi-core
+        run: |
+          pytest tests/test_auto_improve_routine.py -v
+
+      - name: Smoke — fresh DB exits 0
+        # Security review:
+        #   - --db points at a tmp path; no production DB.
+        #   - No API keys in this step.
+        run: |
+          python scripts/auto_improve_routine.py --db /tmp/oxi-smoke.db
+
+      - name: Smoke — dry-run exits 0
+        run: |
+          python scripts/auto_improve_routine.py --db /tmp/oxi-smoke-dry.db --dry-run
+
+      - name: Smoke — idempotency (second run exits 0)
+        # First run seeds the DB; second run detects the event and skips.
+        # We use Python to seed the event directly so the test is
+        # deterministic regardless of whether sources (B2-B4) are wired.
+        run: |
+          python scripts/auto_improve_routine.py --db /tmp/oxi-idem.db
+
+          # Seed a today EXTERNAL_PROPOSAL_EMITTED event so the next run skips.
+          python - <<'PYEOF'
+          import json, sqlite3
+          from datetime import UTC, datetime
+          today = datetime.now(tz=UTC).date().isoformat()
+          conn = sqlite3.connect("/tmp/oxi-idem.db")
+          conn.execute(
+              "INSERT INTO event (task_id, kind, payload, created_at) "
+              "VALUES (NULL, ?, ?, ?)",
+              (
+                  "external_proposal_emitted",
+                  json.dumps({"test": True}),
+                  f"{today} 00:00:01",
+              ),
+          )
+          conn.commit()
+          conn.close()
+          PYEOF
+
+          python scripts/auto_improve_routine.py --db /tmp/oxi-idem.db
