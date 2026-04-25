@@ -70,6 +70,35 @@ logger = logging.getLogger(__name__)
 # this via an adapter extension point (to be added when needed).
 DEFAULT_SESSION_TAG = "oxi"
 
+# ---------------------------------------------------------------------------
+# Repeat-failure escalation constants
+# ---------------------------------------------------------------------------
+
+#: Number of consecutive terminal failures before decompose-first mode kicks in.
+DECOMPOSE_FIRST_FAILURE_THRESHOLD = 3
+
+#: max_turns used for decompose-first escalated dispatches (double the normal 60).
+ESCALATED_MAX_TURNS = 120
+
+#: Prompt note prepended when a task has failed DECOMPOSE_FIRST_FAILURE_THRESHOLD+
+#: times in a row. Instructs the worker to write a plan commit first, then
+#: implement piece by piece — and to open a draft PR if the task is still too
+#: large after planning.
+DECOMPOSE_FIRST_NOTE = """\
+**This task has failed 3+ times. Take a different approach this attempt:**
+
+Before writing any production code, write a SHORT plan as your first
+commit:
+- Create a file `.oxi/plan-{identifier}.md` with: scope (5 bullets
+  max), file list, commit ordering.
+- `git add` and `git commit -m "{identifier}: plan"` — that's commit 1.
+- Then implement piece by piece, committing each piece as you go.
+
+If the task still feels too large after planning, stop after the plan
+commit and open a draft PR titled
+`{identifier}: plan only — needs split`. The orchestrator will see the
+draft PR and dispatch follow-up tasks for the split."""
+
 
 # ---------------------------------------------------------------------------
 # False-failure relaxation helpers (T1-15)
@@ -479,6 +508,30 @@ async def dispatch_one(
     from . import deep_fix as deep_fix_mod
     escalation = deep_fix_mod.get_escalation_override(conn, task.id)
 
+    # Repeat-failure escalation: if this task has failed terminally 3+ times
+    # in a row without a success in between, and there is no active deep_fix
+    # escalation already overriding the prompt, synthesise a decompose-first
+    # override so the worker takes a different approach this attempt.
+    if escalation is None:
+        terminal_failures = _count_recent_terminal_failures(conn, task.id)
+        if terminal_failures >= DECOMPOSE_FIRST_FAILURE_THRESHOLD:
+            from .deep_fix import EscalationRecipe as _EscalationRecipe
+            _note = DECOMPOSE_FIRST_NOTE.replace(
+                "{identifier}", task.identifier
+            )
+            escalation = _EscalationRecipe(
+                model=None,  # keep the adapter's normal model selection
+                prompt_note=_note,
+                label="repeat_failure_decompose_first",
+            )
+            logger.info(
+                "dispatch.escalation.repeat_failure task_identifier=%s "
+                "failure_count=%d max_turns_used=%d",
+                task.identifier,
+                terminal_failures,
+                ESCALATED_MAX_TURNS,
+            )
+
     # Compose the prompt and assemble the invocation.
     base_prompt = dispatch_prompt(task.as_roadmap_item(), branch_name=handle.branch)
     if escalation and escalation.prompt_note:
@@ -497,6 +550,14 @@ async def dispatch_one(
         rate_limit_strikes = _count_recent_rate_limit_failures(conn, task.id)
         model_name = _pick_model(adapter, fallback_steps=rate_limit_strikes)
 
+    # Escalated dispatches (repeat-failure mode) get a higher turn ceiling
+    # to give the worker headroom for planning + incremental commits.
+    is_repeat_failure_escalated = (
+        escalation is not None
+        and escalation.label == "repeat_failure_decompose_first"
+    )
+    max_turns = ESCALATED_MAX_TURNS if is_repeat_failure_escalated else 60
+
     invocation = DispatchInvocation(
         prompt=prompt,
         cwd=handle.path,
@@ -507,7 +568,8 @@ async def dispatch_one(
         # observed on T1-B sweep, 30 turns burned $1 mid-implementation and
         # workers exited before commit/push/PR. Doubling the turn ceiling
         # gives the model headroom to finish the loop instead of starving.
-        max_turns=60,
+        # Escalated (repeat-failure) dispatches use ESCALATED_MAX_TURNS (120).
+        max_turns=max_turns,
         allowed_tools=("Bash", "Read", "Edit", "Write", "Glob", "Grep"),
         extra_env=dict(extra_env or {}),
         anthropic_api_key=anthropic_api_key,
@@ -852,10 +914,45 @@ def _count_recent_rate_limit_failures(
     return count
 
 
+def _count_recent_terminal_failures(
+    conn: sqlite3.Connection, task_id: int
+) -> int:
+    """Count how many times this exact task has failed terminally without success in between.
+
+    Walks the event log for this task in reverse chronological order. Each
+    ``dispatch_failed`` event counts +1. Stops on the first
+    ``dispatch_success`` (chain broken — task succeeded once, then failed
+    again; that is a fresh streak). ``dispatch_retryable`` and
+    ``dispatch_timeout`` events are ignored: retryable is transient and
+    timeout is a wall-clock kill, neither represents a semantic failure of
+    the worker's approach.
+    """
+    rows = conn.execute(
+        "SELECT kind FROM event "
+        "WHERE task_id = ? AND kind IN ('dispatch_failed', 'dispatch_succeeded') "
+        "ORDER BY id DESC",
+        (task_id,),
+    ).fetchall()
+
+    count = 0
+    for row in rows:
+        kind = row[0]
+        if kind == LedgerEvent.DISPATCH_FAILED:
+            count += 1
+        elif kind == LedgerEvent.DISPATCH_SUCCEEDED:
+            # Streak broken by a prior success — stop counting.
+            break
+    return count
+
+
 __all__ = [
     "DEFAULT_SESSION_TAG",
+    "DECOMPOSE_FIRST_FAILURE_THRESHOLD",
+    "DECOMPOSE_FIRST_NOTE",
+    "ESCALATED_MAX_TURNS",
     "Task",
     "_branch_has_commits_ahead",
+    "_count_recent_terminal_failures",
     "_maybe_upgrade_to_success",
     "_pr_exists_for_branch",
     "dispatch_loop",
