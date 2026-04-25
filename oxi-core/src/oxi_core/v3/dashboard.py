@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from ..adapter import get_active_adapter
 from . import budget as budget_mod
 from ._glyphs import glyph_for_status
+from ._logo import LOGO
 from .brief import generate as generate_brief
 from .engine_health import HEALTH_BANNER, is_engine_unhealthy_from_db
 
@@ -352,6 +353,14 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
 body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; color: #222; }}
 h1 {{ margin-bottom: 0.2rem; }}
 .meta {{ color: #666; margin-bottom: 2rem; }}
+.brand-logo {{
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 1rem;
+  line-height: 1.0;
+  color: #888;
+  margin: 0 0 0.5rem 0;
+  white-space: pre;
+}}
 table {{ border-collapse: collapse; margin-bottom: 2rem; }}
 th, td {{ border: 1px solid #ddd; padding: 0.3rem 0.6rem; text-align: left; }}
 th {{ background: #f5f5f5; }}
@@ -439,6 +448,7 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
 </head>
 <body>
 {health_banner_html}
+<pre class="brand-logo">{html.escape(LOGO)}</pre>
 <h1>{html.escape(instance)}</h1>
 <p class="meta">
   repo: <code>{html.escape(repo)}</code> &middot;

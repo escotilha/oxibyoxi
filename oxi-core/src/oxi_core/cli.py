@@ -688,8 +688,34 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="oxi",
         description="Forkable autonomous coding orchestrator.",
     )
+    # ``oxi --version`` prints the ASCII logo above the version line.
+    # The ``oxi {version}`` line stays last so scripts that pipe to
+    # ``tail -1`` (or grep for ``oxi N.N.N``) keep working.
+    #
+    # We use a custom action rather than ``action="version"`` because
+    # argparse's default _VersionAction normalises whitespace and
+    # strips embedded newlines — that flattens the multi-line logo
+    # into a single line.  Custom action preserves the layout.
+    from .v3._logo import LOGO
+
+    class _LogoVersionAction(argparse.Action):
+        def __init__(
+            self, option_strings, dest=argparse.SUPPRESS,
+            default=argparse.SUPPRESS, **kwargs,
+        ):
+            super().__init__(
+                option_strings=option_strings, dest=dest, default=default,
+                nargs=0, **kwargs,
+            )
+
+        def __call__(self, parser, namespace, values, option_string=None):
+            sys.stdout.write(f"{LOGO}\noxi {__version__}\n")
+            parser.exit(0)
+
     parser.add_argument(
-        "--version", action="version", version=f"oxi {__version__}"
+        "--version",
+        action=_LogoVersionAction,
+        help="show program's version and exit",
     )
     sub = parser.add_subparsers(dest="command")
 

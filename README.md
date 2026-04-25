@@ -1,3 +1,8 @@
+```
+ \_//
+  oxi
+```
+
 # oxi
 
 **Point Claude Code at a markdown roadmap. Walk away. Come back to PRs.**
