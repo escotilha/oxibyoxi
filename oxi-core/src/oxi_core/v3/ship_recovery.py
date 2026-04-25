@@ -24,7 +24,8 @@ Shared invariants with the rest of the engine:
 - Engine-stop check at entry (killswitch respected).
 - Every state update stamps ``last_progress_at`` (anti-pattern #1).
 - Emits ``ship_recovered`` or ``ship_recovery_failed`` ledger events.
-- Argv-form subprocess invocation; no ``shell=True``.
+- Argv-form subprocess invocation; no ``shell=True``; ``os.fspath``
+  used at the ``cwd`` boundary instead of ``str()``.
 
 What this module does NOT do:
 
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shlex
 import sqlite3
 import subprocess
@@ -87,7 +89,7 @@ def _run_git(
     """
     return subprocess.run(
         ["git", *args],
-        cwd=str(cwd),
+        cwd=os.fspath(cwd),
         capture_output=True,
         text=True,
         check=False,

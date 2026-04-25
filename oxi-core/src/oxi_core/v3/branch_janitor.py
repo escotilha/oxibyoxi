@@ -17,11 +17,15 @@ only cleans branches oxi actually merged.
 Operates against GitHubClient (list_open_prs) and a repo-local
 git executable for ancestry checks. Dry-run available via
 ``delete=False`` — useful as a preflight before actually pruning.
+
+All subprocess calls pass ``cwd`` via ``os.fspath`` (not ``str``)
+to correctly handle any ``PathLike`` input.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,11 +57,11 @@ def _list_remote_branches(
     """
     subprocess.run(
         ["git", "fetch", "--prune", remote],
-        cwd=str(repo_root), check=False, capture_output=True,
+        cwd=os.fspath(repo_root), check=False, capture_output=True,
     )
     proc = subprocess.run(
         ["git", "branch", "-r", "--format=%(refname:short)"],
-        cwd=str(repo_root), check=False, capture_output=True, text=True,
+        cwd=os.fspath(repo_root), check=False, capture_output=True, text=True,
     )
     if proc.returncode != 0:
         return ()
@@ -85,7 +89,7 @@ def _has_unmerged_commits(
     proc = subprocess.run(
         ["git", "rev-list", "--count",
          f"{remote}/{default_branch}..{remote}/{branch}"],
-        cwd=str(repo_root), check=False, capture_output=True, text=True,
+        cwd=os.fspath(repo_root), check=False, capture_output=True, text=True,
     )
     if proc.returncode != 0:
         # Can't decide → conservative: treat as unmerged.
@@ -102,7 +106,7 @@ def _delete_remote_branch(
     """Push a delete to the remote. Returns True on success."""
     proc = subprocess.run(
         ["git", "push", remote, "--delete", branch],
-        cwd=str(repo_root), check=False, capture_output=True, text=True,
+        cwd=os.fspath(repo_root), check=False, capture_output=True, text=True,
     )
     if proc.returncode != 0:
         logger.warning(
