@@ -799,3 +799,148 @@ async def test_upgrade_emits_dispatch_succeeded_event(environment):
     ]
     assert "dispatch_succeeded" in kinds
     assert "dispatch_failed" not in kinds
+
+
+# ---------------------------------------------------------------------------
+# dispatch_loop concurrency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dispatch_loop_serial_when_concurrency_is_one(environment, monkeypatch):
+    """concurrency=1 keeps the original serial code path.
+
+    Two tasks → both dispatched, but sequentially. Verified by
+    asserting the second dispatch_one call only starts after the
+    first finishes (via shared in-flight counter).
+    """
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "happy")
+    env = environment
+    _seed_task(env["conn"], identifier="T0-1", title="first")
+    _seed_task(env["conn"], identifier="T0-2", title="second")
+
+    in_flight = {"max": 0, "current": 0}
+
+    from oxi_core.v3 import dispatch as dispatch_mod
+    original = dispatch_mod.dispatch_one
+
+    async def wrapped(**kwargs):
+        in_flight["current"] += 1
+        in_flight["max"] = max(in_flight["max"], in_flight["current"])
+        try:
+            return await original(**kwargs)
+        finally:
+            in_flight["current"] -= 1
+
+    monkeypatch.setattr(dispatch_mod, "dispatch_one", wrapped)
+
+    results = await dispatch_loop(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        max_iterations=5,
+        concurrency=1,
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("happy"),
+    )
+    assert len(results) == 2
+    assert in_flight["max"] == 1, "serial mode must never have >1 in-flight"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_loop_parallel_runs_concurrently(environment, monkeypatch):
+    """concurrency>1 actually fans out: ≥2 dispatch_one calls run at once."""
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "happy")
+    env = environment
+    for i in range(4):
+        _seed_task(env["conn"], identifier=f"T0-{i+1}", title=f"task {i+1}")
+
+    in_flight = {"max": 0, "current": 0}
+
+    from oxi_core.v3 import dispatch as dispatch_mod
+    original = dispatch_mod.dispatch_one
+
+    async def wrapped(**kwargs):
+        in_flight["current"] += 1
+        in_flight["max"] = max(in_flight["max"], in_flight["current"])
+        try:
+            # Small await to let the scheduler interleave; without it,
+            # the fake-claude path may run synchronously enough that
+            # parallelism never gets exercised in the test.
+            import asyncio
+            await asyncio.sleep(0.05)
+            return await original(**kwargs)
+        finally:
+            in_flight["current"] -= 1
+
+    monkeypatch.setattr(dispatch_mod, "dispatch_one", wrapped)
+
+    results = await dispatch_loop(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        max_iterations=4,
+        concurrency=3,
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("happy"),
+    )
+    assert len(results) == 4
+    assert in_flight["max"] >= 2, (
+        f"parallel mode should run at least 2 concurrently; saw max "
+        f"{in_flight['max']}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_loop_parallel_respects_max_iterations(environment, monkeypatch):
+    """concurrency=5 with max_iterations=2 → at most 2 dispatch_one calls."""
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "happy")
+    env = environment
+    for i in range(5):
+        _seed_task(env["conn"], identifier=f"T0-{i+1}", title=f"task {i+1}")
+
+    from oxi_core.v3 import dispatch as dispatch_mod
+    call_count = {"n": 0}
+    original = dispatch_mod.dispatch_one
+
+    async def wrapped(**kwargs):
+        call_count["n"] += 1
+        return await original(**kwargs)
+
+    monkeypatch.setattr(dispatch_mod, "dispatch_one", wrapped)
+
+    results = await dispatch_loop(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        max_iterations=2,
+        concurrency=5,
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("happy"),
+    )
+    assert len(results) == 2
+    assert call_count["n"] == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatch_loop_parallel_drains_when_queue_empty(environment, monkeypatch):
+    """concurrency=4 + only 2 planned tasks → 2 dispatched, no errors."""
+    monkeypatch.setenv("FAKE_CLAUDE_SCENARIO", "happy")
+    env = environment
+    _seed_task(env["conn"], identifier="T0-1", title="first")
+    _seed_task(env["conn"], identifier="T0-2", title="second")
+
+    results = await dispatch_loop(
+        conn=env["conn"],
+        adapter=env["adapter"],
+        engine_state=env["engine_state"],
+        repo_root=env["repo_root"],
+        max_iterations=10,
+        concurrency=4,
+        binary=str(FAKE_CLAUDE),
+        extra_env=_with_fake("happy"),
+    )
+    assert len(results) == 2

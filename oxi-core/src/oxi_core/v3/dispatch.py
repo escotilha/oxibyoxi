@@ -562,6 +562,7 @@ async def dispatch_loop(
     engine_health: EngineHealth | None = None,
     repo_root: Path,
     max_iterations: int = 1,
+    concurrency: int | None = None,
     binary: str = "claude",
     anthropic_api_key: str | None = None,
     extra_env: dict[str, str] | None = None,
@@ -580,9 +581,78 @@ async def dispatch_loop(
     - engine_health is unhealthy (consecutive failures exceeded threshold)
     - dispatch_one() returns None (no planned tasks left)
 
+    The ``concurrency`` parameter controls how many dispatches run in
+    parallel:
+    - ``None`` (default) — read the cap from the adapter's
+      ``DispatchHost.max_concurrent`` (summed across hosts). This is
+      the behavior fork operators expect; the adapter is the source
+      of truth.
+    - ``1`` — fully serial. Identical to the pre-parallel behavior.
+    - any other int — explicit override (used by tests).
+
+    Task claim is atomic at the SQLite level (``WHERE status =
+    'planned'`` in dispatch_one), so concurrent calls never race onto
+    the same task — at most one winner per row.
+
     The ``_check_commits`` and ``_check_pr`` parameters are for testing
     only; production callers should leave them as None (defaults apply).
     They are forwarded verbatim to each ``dispatch_one`` call.
+    """
+    if concurrency is None:
+        # Sum across all hosts; the dispatch_pool picks per-host
+        # placement on its own. We just need to know how many we can
+        # run total.
+        hosts = adapter.dispatch_hosts()
+        concurrency = sum(h.max_concurrent for h in hosts) if hosts else 1
+    if concurrency <= 1:
+        return await _dispatch_loop_serial(
+            conn=conn,
+            adapter=adapter,
+            engine_state=engine_state,
+            engine_health=engine_health,
+            repo_root=repo_root,
+            max_iterations=max_iterations,
+            binary=binary,
+            anthropic_api_key=anthropic_api_key,
+            extra_env=extra_env,
+            _check_commits=_check_commits,
+            _check_pr=_check_pr,
+        )
+    return await _dispatch_loop_parallel(
+        conn=conn,
+        adapter=adapter,
+        engine_state=engine_state,
+        engine_health=engine_health,
+        repo_root=repo_root,
+        max_iterations=max_iterations,
+        concurrency=concurrency,
+        binary=binary,
+        anthropic_api_key=anthropic_api_key,
+        extra_env=extra_env,
+        _check_commits=_check_commits,
+        _check_pr=_check_pr,
+    )
+
+
+async def _dispatch_loop_serial(
+    *,
+    conn: sqlite3.Connection,
+    adapter: Adapter,
+    engine_state: EngineState,
+    engine_health: EngineHealth | None,
+    repo_root: Path,
+    max_iterations: int,
+    binary: str,
+    anthropic_api_key: str | None,
+    extra_env: dict[str, str] | None,
+    _check_commits: Callable[[Path, str], bool] | None,
+    _check_pr: Callable[[str, str], bool] | None,
+) -> list[DispatchResult]:
+    """The original serial dispatch loop.
+
+    Kept as the implementation for ``concurrency=1`` so existing
+    tests, fixtures, and call sites that never asked for parallelism
+    keep their exact behavior.
     """
     results: list[DispatchResult] = []
     for _ in range(max_iterations):
@@ -605,6 +675,98 @@ async def dispatch_loop(
         if outcome is None:
             break
         results.append(outcome)
+    return results
+
+
+async def _dispatch_loop_parallel(
+    *,
+    conn: sqlite3.Connection,
+    adapter: Adapter,
+    engine_state: EngineState,
+    engine_health: EngineHealth | None,
+    repo_root: Path,
+    max_iterations: int,
+    concurrency: int,
+    binary: str,
+    anthropic_api_key: str | None,
+    extra_env: dict[str, str] | None,
+    _check_commits: Callable[[Path, str], bool] | None,
+    _check_pr: Callable[[str, str], bool] | None,
+) -> list[DispatchResult]:
+    """Bounded-parallel dispatch loop.
+
+    Maintains ``concurrency`` in-flight dispatch_one() coroutines.
+    When one finishes, immediately spawns the next (up to
+    ``max_iterations`` total). Stops when:
+    - the spawn budget is exhausted
+    - dispatch_one returns None (no planned tasks left)
+    - engine_state.is_stopping() turns true
+    - engine_health.is_unhealthy() turns true
+
+    Why use a manual scheduler instead of asyncio.gather? gather
+    requires the full task list up-front; we don't know it because
+    each dispatch_one's outcome can affect whether the next
+    iteration should run (e.g., mid-loop killswitch). The
+    spawn-as-you-finish pattern below honors those gates the same
+    way the serial loop does.
+    """
+    import asyncio
+
+    results: list[DispatchResult] = []
+    in_flight: set[asyncio.Task[DispatchResult | None]] = set()
+    spawned = 0
+    drained = False  # True once dispatch_one() has returned None
+
+    def _should_stop() -> bool:
+        if engine_state.is_stopping():
+            return True
+        if engine_health is not None and engine_health.is_unhealthy():
+            return True
+        return False
+
+    def _spawn_one() -> bool:
+        """Spawn one dispatch_one task. Return True if spawned."""
+        nonlocal spawned
+        if spawned >= max_iterations or drained or _should_stop():
+            return False
+        coro = dispatch_one(
+            conn=conn,
+            adapter=adapter,
+            engine_state=engine_state,
+            engine_health=engine_health,
+            repo_root=repo_root,
+            binary=binary,
+            anthropic_api_key=anthropic_api_key,
+            extra_env=extra_env,
+            _check_commits=_check_commits,
+            _check_pr=_check_pr,
+        )
+        in_flight.add(asyncio.create_task(coro))
+        spawned += 1
+        return True
+
+    # Prime: fill the in-flight pool up to concurrency.
+    for _ in range(concurrency):
+        if not _spawn_one():
+            break
+
+    # Drain + replenish loop. Each completed task either yields a
+    # DispatchResult (running fine, spawn one more) or None (queue
+    # empty — stop spawning, drain remaining).
+    while in_flight:
+        done, in_flight = await asyncio.wait(
+            in_flight, return_when=asyncio.FIRST_COMPLETED
+        )
+        for finished in done:
+            outcome = await finished
+            if outcome is None:
+                drained = True
+                continue
+            results.append(outcome)
+        # Try to refill, unless something flipped the gates.
+        if not drained and not _should_stop():
+            while len(in_flight) < concurrency and _spawn_one():
+                pass
     return results
 
 
