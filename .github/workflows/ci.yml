@@ -128,7 +128,17 @@ jobs:
         # The mypy strict policy is enforced per-module via tool.mypy
         # overrides in pyproject.toml. Adding a module to the strict
         # list is a one-way ratchet: regressions fail this step.
-        run: mypy src/oxi_core/adapter.py src/oxi_core/db.py src/oxi_core/v3/notification.py
+        run: |
+          mypy \
+            src/oxi_core/adapter.py \
+            src/oxi_core/db.py \
+            src/oxi_core/v3/notification.py \
+            src/oxi_core/v3/budget.py \
+            src/oxi_core/v3/deadman.py \
+            src/oxi_core/v3/engine_health.py \
+            src/oxi_core/v3/oauth_watch.py \
+            src/oxi_core/v3/skills_loader.py \
+            src/oxi_core/v3/tail_dispatch.py
       - name: Pytest (oxi-core)
         working-directory: oxi-core
         run: pytest -q

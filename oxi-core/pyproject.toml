@@ -96,6 +96,12 @@ module = [
   "oxi_core.adapter",
   "oxi_core.db",
   "oxi_core.v3.notification",
+  "oxi_core.v3.budget",
+  "oxi_core.v3.deadman",
+  "oxi_core.v3.engine_health",
+  "oxi_core.v3.oauth_watch",
+  "oxi_core.v3.skills_loader",
+  "oxi_core.v3.tail_dispatch",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
