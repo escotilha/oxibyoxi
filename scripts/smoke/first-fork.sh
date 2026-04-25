@@ -129,7 +129,8 @@ echo "  installed: ${OXI_VERSION}"
 #
 # The wizard reads from the builtin input(), which reads from stdin when
 # the process is not connected to a terminal. We pipe one answer per line
-# in the exact order the wizard asks (12 prompts total).
+# in the exact order the wizard asks (13 prompts total — the final
+# review-and-confirm gate was added in T1-23).
 #
 # Prompt order:
 #   1. project_name             → "smoketest"
@@ -144,6 +145,7 @@ echo "  installed: ${OXI_VERSION}"
 #  10. budget per-task sonnet   → "" (accept default = 0.50)
 #  11. max_concurrent           → "" (accept default = 3)
 #  12. auto_merge               → "n" (accept default = N)
+#  13. review-and-confirm gate  → "y" (commit the scaffold)
 # ---------------------------------------------------------------------------
 
 echo ""
@@ -165,6 +167,7 @@ printf '%s\n' \
   "" \
   "" \
   "n" \
+  "y" \
   | "${OXI}" init "${ADAPTER_DIR}"
 
 if [[ ! -f "${ADAPTER_DIR}/pyproject.toml" ]]; then
