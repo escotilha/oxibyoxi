@@ -1,0 +1,52 @@
+# nightly-integration.yml — exercise the GitHub-facing client
+# surface against the live escotilha/oxi repo every night.
+#
+# Read-only by design (list/get/list-checks). Catches gh-CLI
+# breakage and GitHub API schema drift before a real dispatch
+# needs it at 03:00.
+#
+# Schedule: 06:00 UTC daily — far enough from peak GH traffic
+# that we don't compete for rate limits, far enough from local
+# midnight that operators see results during the day.
+#
+# Security review:
+#   - No ${{ github.event.* }} interpolation in run: blocks.
+#   - The test calls real gh against escotilha/oxi (current repo).
+#     The runner's gh installation already has the auth token from
+#     `gh auth status` on the gh-runner user; no secrets pass
+#     through this workflow.
+#   - Read-only — no writes to GitHub.
+#   - On failure, the workflow file fails but no PRs are touched.
+
+name: nightly-integration
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: probe gh CLI + GitHubClient against live API
+    runs-on: [self-hosted, oxi-vps]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install oxi-core
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e "./oxi-core"
+
+      - name: Run nightly integration probe
+        env:
+          OXI_NIGHTLY_REPO: ${{ github.repository }}
+        run: python scripts/nightly-integration.py
