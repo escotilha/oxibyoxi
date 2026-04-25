@@ -237,9 +237,9 @@ def test_recommend_max20x_with_48gb_recommends_full_envelope():
         ram_gb=48.0, cpu_cores=10, plan_tier="max_20x", platform_name="Darwin"
     )
     rec = recommend(capacity)
-    # 48 GB / (1.5 * 2) = 16 ram envelope; plan tier max_20x = 10;
+    # 48 GB / (0.5 * 2) = 48 ram envelope; plan tier max_20x = 10;
     # ceiling = 20 (raised from 10 once parallel dispatch landed).
-    # min(10, 16, 20) = 10 — plan-tier-bound on a roomy 48 GB box.
+    # min(10, 48, 20) = 10 — plan-tier-bound on a roomy 48 GB box.
     assert rec.max_concurrent == PLAN_TIER_CONCURRENCY["max_20x"]
     assert rec.daily_hard_cap_usd == PLAN_TIER_HARD_CAPS["max_20x"]
 
@@ -254,12 +254,14 @@ def test_recommend_standard_plan_caps_concurrency_at_3():
 
 
 def test_recommend_low_ram_caps_concurrency():
-    """4 GB host → can't run 10 workers no matter what plan."""
+    """4 GB host → can't run many workers no matter what plan."""
     capacity = HostCapacity(
         ram_gb=4.0, cpu_cores=4, plan_tier="max_20x", platform_name="Linux"
     )
     rec = recommend(capacity)
-    assert rec.max_concurrent == 1  # 4 / (1.5 * 2) = 1
+    # 4 / (0.5 * 2) = 4 ram envelope; min(plan_tier=10, 4) = 4
+    # The test name still holds: the box is bounded by RAM, not plan.
+    assert rec.max_concurrent == 4
 
 
 def test_recommend_unknown_plan_falls_back_to_standard():
@@ -337,5 +339,5 @@ def test_probe_and_recommend_returns_pair():
     assert 7.5 < capacity.ram_gb < 8.5
     assert capacity.cpu_cores == 4
     assert capacity.plan_tier == "max_5x"
-    # 8 GB → ram_envelope = 8 // (1.5 * 2) = 2; max_5x recommends 5 → min = 2
-    assert rec.max_concurrent == 2
+    # 8 GB → ram_envelope = 8 // (0.5 * 2) = 8; max_5x recommends 5 → min = 5
+    assert rec.max_concurrent == 5

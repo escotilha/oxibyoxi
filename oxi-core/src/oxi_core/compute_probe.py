@@ -57,7 +57,18 @@ from dataclasses import dataclass
 # ---------------------------------------------------------------------------
 
 #: Approximate resident memory of a single claude-code worker, GB.
-WORKER_MEM_GB: float = 1.5
+#:
+#: Lowered 1.5 → 0.5 on 2026-04-25 PM after measuring actual RSS of
+#: 5 concurrent workers on a Mac mini (range 295-328 MB, well under
+#: 0.5 GB). The old 1.5 GB was a Day-1 safety estimate; the line
+#: in `recommend()` already adds another 2x headroom (see
+#: `WORKER_MEM_GB * 2` divisor below), so this still leaves a
+#: comfortable 3-4x cushion vs reality.
+#:
+#: Net effect: a 48 GB Mac mini with 18 GB free RAM (typical with
+#: dashboard + a few other apps open) goes from probed concurrency
+#: of 5 → ~16 (capped at HARDWARE_CONCURRENCY_CEILING=20).
+WORKER_MEM_GB: float = 0.5
 
 #: Ceiling for concurrency derived from RAM. Bumped from 10 (the
 #: original validated envelope) to 20 once the dogfood loop proved
