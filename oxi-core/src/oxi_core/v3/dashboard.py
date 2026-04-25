@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..adapter import get_active_adapter
+from . import budget as budget_mod
 from ._glyphs import glyph_for_status
 from .brief import generate as generate_brief
 from .engine_health import HEALTH_BANNER, is_engine_unhealthy_from_db
@@ -129,6 +130,103 @@ def _render_task_events(events: list[tuple[str, str, str]]) -> str:
     )
 
 
+def _hero_counts(conn: sqlite3.Connection) -> tuple[int, int]:
+    """Return ``(workers_active, prs_open)`` for the hero row.
+
+    Workers active: tasks currently being worked on by a Claude session
+    (status ``dispatched`` and no PR yet observed).
+
+    PRs open: tasks where the worker has opened a PR but the merge gate
+    hasn't run yet (status ``dispatched`` and ``pr_number IS NOT NULL``).
+
+    Both queries are cheap — one COUNT(*) each — and rely on schema
+    fields that have been stable since the engine's first cut.
+    """
+    workers_active = conn.execute(
+        "SELECT COUNT(*) FROM task "
+        "WHERE status = 'dispatched' AND pr_number IS NULL"
+    ).fetchone()[0]
+    prs_open = conn.execute(
+        "SELECT COUNT(*) FROM task "
+        "WHERE status = 'dispatched' AND pr_number IS NOT NULL"
+    ).fetchone()[0]
+    return int(workers_active), int(prs_open)
+
+
+def _budget_color_for_remaining(pct_remaining: float) -> str:
+    """Map remaining-budget percentage to a CSS color name.
+
+    Pressure gradient — green when comfortable, amber when narrowing,
+    red when nearly exhausted.  The thresholds mirror the budget
+    verdict ladder (OK / WARN / HARD_STOP) but read inverted because
+    we're describing what's *left*, not what's *spent*.
+    """
+    if pct_remaining > 50.0:
+        return "#3a7d3a"  # green
+    if pct_remaining >= 20.0:
+        return "#b88600"  # amber
+    return "#a52a2a"  # red
+
+
+def _render_hero(
+    *,
+    workers_active: int,
+    prs_open: int,
+    merged_today: int,
+    budget_remaining_usd: float,
+    budget_cap_usd: float,
+) -> str:
+    """Top-of-page 4-tile hero row + horizontal budget bar.
+
+    Pure HTML/CSS; the ``hero-tile`` and ``budget-bar`` rules live in
+    the page's single inline ``<style>`` block.  All numeric inputs
+    are typed and clamped before formatting, so no escape pass is
+    needed for the values themselves.
+    """
+    if budget_cap_usd > 0:
+        pct_remaining = max(
+            0.0, min(100.0, (budget_remaining_usd / budget_cap_usd) * 100.0)
+        )
+    else:
+        # Cap=0 means "no cap configured".  Render the bar as full and
+        # describe the budget as "uncapped" rather than dividing by zero.
+        pct_remaining = 100.0
+    bar_color = _budget_color_for_remaining(pct_remaining)
+    bar_pct_str = f"{pct_remaining:.0f}%"
+
+    if budget_cap_usd > 0:
+        budget_value = f"${budget_remaining_usd:.2f}"
+        budget_label = f"of ${budget_cap_usd:.2f} cap"
+    else:
+        budget_value = "uncapped"
+        budget_label = "no daily cap configured"
+
+    return (
+        '<div class="hero">'
+        '<div class="hero-tile">'
+        f'<div class="hero-num">{workers_active}</div>'
+        '<div class="hero-label">workers active</div>'
+        '</div>'
+        '<div class="hero-tile">'
+        f'<div class="hero-num">{prs_open}</div>'
+        '<div class="hero-label">PRs open</div>'
+        '</div>'
+        '<div class="hero-tile">'
+        f'<div class="hero-num">{merged_today}</div>'
+        '<div class="hero-label">merged in window</div>'
+        '</div>'
+        '<div class="hero-tile">'
+        f'<div class="hero-num">{html.escape(budget_value)}</div>'
+        f'<div class="hero-label">{html.escape(budget_label)}</div>'
+        '<div class="budget-bar-track">'
+        f'<div class="budget-bar-fill" style="width: {bar_pct_str}; '
+        f'background: {bar_color};"></div>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+
 def _recovered_task_ids(conn: sqlite3.Connection) -> set[int]:
     """Return task IDs that have at least one ``auto_recover_attempted`` event.
 
@@ -157,6 +255,22 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
     repo = adapter.github_repo()
 
     brief = generate_brief(conn, window_hours=window_hours)
+
+    # Hero-row data — four numbers operators want to see at a glance.
+    workers_active, prs_open = _hero_counts(conn)
+    merged_today = len(brief.recent_merges)
+    bstatus = budget_mod.check(conn)
+    budget_remaining = max(
+        0.0, bstatus.daily_hard_cap_usd - bstatus.today_spend_usd
+    )
+    hero_html = _render_hero(
+        workers_active=workers_active,
+        prs_open=prs_open,
+        merged_today=merged_today,
+        budget_remaining_usd=budget_remaining,
+        budget_cap_usd=bstatus.daily_hard_cap_usd,
+    )
+
     status_rows = "".join(
         # Glyph + status text in the histogram.  The glyph is purely
         # visual; the status string is preserved unchanged so existing
@@ -244,6 +358,44 @@ th {{ background: #f5f5f5; }}
 code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
 .summary {{ display: flex; gap: 2rem; }}
 .summary > div {{ flex: 1; }}
+.hero {{
+  display: flex;
+  gap: 1rem;
+  margin: 1.5rem 0 2rem 0;
+  flex-wrap: wrap;
+}}
+.hero-tile {{
+  flex: 1;
+  min-width: 12rem;
+  padding: 1rem 1.2rem;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+}}
+.hero-num {{
+  font-size: 2rem;
+  font-weight: 600;
+  line-height: 1.1;
+  color: #222;
+}}
+.hero-label {{
+  font-size: 0.85rem;
+  color: #666;
+  margin-top: 0.25rem;
+}}
+.budget-bar-track {{
+  margin-top: 0.6rem;
+  width: 100%;
+  height: 8px;
+  background: #e9e9e9;
+  border-radius: 4px;
+  overflow: hidden;
+}}
+.budget-bar-fill {{
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.2s ease;
+}}
 .retry-badge {{
   display: inline-block;
   margin-left: 0.3rem;
@@ -294,6 +446,8 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
   window: last {window_hours}h &middot;
   rendered: {now}
 </p>
+
+{hero_html}
 
 <div class="summary">
   <div>

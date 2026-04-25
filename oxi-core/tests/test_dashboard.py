@@ -22,6 +22,9 @@ from oxi_core.adapter import (
 )
 from oxi_core.v3.dashboard import (
     DashboardConfig,
+    _budget_color_for_remaining,
+    _hero_counts,
+    _render_hero,
     _render_task_events,
     _task_last_events,
     make_server,
@@ -467,32 +470,119 @@ def test_server_ignores_querystring_on_root(tmp_path: Path):
         server.server_close()
 
 
+# Hero row — T1-20
 # ---------------------------------------------------------------------------
-# Status glyph integration — T1-21
-# ---------------------------------------------------------------------------
 
 
-def test_render_html_status_column_shows_glyph(conn):
-    """Task table status column gets the glyph + the status word."""
-    _seed(conn, "T0-1", "merged")
-    _seed(conn, "T0-2", "planned")
-    _seed(conn, "T0-3", "failed")
+def test_hero_counts_empty_db(conn):
+    workers, prs = _hero_counts(conn)
+    assert workers == 0
+    assert prs == 0
+
+
+def test_hero_counts_workers_active_excludes_pr_open(conn):
+    # Worker still running — no PR yet.
+    _seed(conn, "T0-1", "dispatched", pr_number=None)
+    # Worker done its part — PR opened.
+    _seed(conn, "T0-2", "dispatched", pr_number=42)
+    # Already merged — should not count anywhere.
+    _seed(conn, "T0-3", "merged", pr_number=43)
+    workers, prs = _hero_counts(conn)
+    assert workers == 1
+    assert prs == 1
+
+
+def test_hero_counts_excludes_planned_and_failed(conn):
+    _seed(conn, "T0-1", "planned")
+    _seed(conn, "T0-2", "failed")
+    _seed(conn, "T0-3", "abandoned")
+    workers, prs = _hero_counts(conn)
+    assert workers == 0
+    assert prs == 0
+
+
+def test_budget_color_pressure_gradient():
+    assert _budget_color_for_remaining(100.0) == "#3a7d3a"  # green
+    assert _budget_color_for_remaining(60.0) == "#3a7d3a"
+    assert _budget_color_for_remaining(50.0) == "#b88600"  # amber at boundary
+    assert _budget_color_for_remaining(30.0) == "#b88600"
+    assert _budget_color_for_remaining(20.0) == "#b88600"  # amber at boundary
+    assert _budget_color_for_remaining(10.0) == "#a52a2a"  # red
+    assert _budget_color_for_remaining(0.0) == "#a52a2a"
+
+
+def test_render_hero_includes_all_four_tiles():
+    html_str = _render_hero(
+        workers_active=2,
+        prs_open=3,
+        merged_today=5,
+        budget_remaining_usd=7.50,
+        budget_cap_usd=10.0,
+    )
+    assert 'class="hero"' in html_str
+    assert "workers active" in html_str
+    assert "PRs open" in html_str
+    assert "merged in window" in html_str
+    # Numbers must appear in the rendered tiles.
+    assert ">2<" in html_str
+    assert ">3<" in html_str
+    assert ">5<" in html_str
+    assert "$7.50" in html_str
+    assert "$10.00" in html_str
+
+
+def test_render_hero_uncapped_budget_renders_label():
+    html_str = _render_hero(
+        workers_active=0,
+        prs_open=0,
+        merged_today=0,
+        budget_remaining_usd=0.0,
+        budget_cap_usd=0.0,
+    )
+    assert "uncapped" in html_str
+    assert "no daily cap configured" in html_str
+    # Bar still renders, full width so it doesn't look broken.
+    assert "width: 100%" in html_str
+
+
+def test_render_hero_red_at_low_remaining():
+    html_str = _render_hero(
+        workers_active=0,
+        prs_open=0,
+        merged_today=0,
+        budget_remaining_usd=0.50,
+        budget_cap_usd=10.0,
+    )
+    # 5% remaining → red.
+    assert "#a52a2a" in html_str
+
+
+def test_render_hero_green_at_high_remaining():
+    html_str = _render_hero(
+        workers_active=0,
+        prs_open=0,
+        merged_today=0,
+        budget_remaining_usd=8.0,
+        budget_cap_usd=10.0,
+    )
+    # 80% remaining → green.
+    assert "#3a7d3a" in html_str
+
+
+def test_render_html_includes_hero_section(conn):
     html_str = render_html(conn)
-    # Status text still present (existing tests rely on this).
-    assert "merged" in html_str
-    assert "planned" in html_str
-    assert "failed" in html_str
-    # Glyphs are now alongside the words.
-    assert "✓ merged" in html_str
-    assert "○ planned" in html_str
-    assert "✗ failed" in html_str
+    assert 'class="hero"' in html_str
+    assert ".hero-tile" in html_str  # CSS rule
+    assert ".budget-bar-track" in html_str
+    assert "workers active" in html_str
+    assert "PRs open" in html_str
 
 
-def test_render_html_status_histogram_shows_glyph(conn):
-    """The 'Status (last Nh)' table also gets glyphs."""
-    _seed(conn, "T0-1", "merged")
-    _seed(conn, "T0-2", "merged")
-    _seed(conn, "T0-3", "dispatched", pr_number=42)
+def test_render_html_hero_reflects_real_task_state(conn):
+    _seed(conn, "T0-1", "dispatched", pr_number=None)
+    _seed(conn, "T0-2", "dispatched", pr_number=99)
+    _seed(conn, "T0-3", "dispatched", pr_number=100)
     html_str = render_html(conn)
-    assert "✓ merged" in html_str
-    assert "● dispatched" in html_str
+    # 1 worker still running, 2 PRs open.
+    assert ">1<" in html_str
+    assert ">2<" in html_str
