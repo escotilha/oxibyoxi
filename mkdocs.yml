@@ -1,0 +1,108 @@
+site_name: oxi
+site_description: Point Claude Code at a markdown roadmap. Walk away. Come back to PRs.
+site_url: https://escotilha.github.io/oxi/
+repo_url: https://github.com/escotilha/oxi
+repo_name: escotilha/oxi
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.action.edit
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Manual:
+      - Overview: manual/index.md
+      - Install: manual/install.md
+      - Adapter: manual/adapter.md
+      - Roadmap format: manual/roadmap-format.md
+      - Running dispatch: manual/running-dispatch.md
+      - Budget caps: manual/budget-caps.md
+      - Dashboard: manual/dashboard.md
+      - Safety rails: manual/safety-rails.md
+      - Dogfood loop: manual/dogfood-loop.md
+      - Rollback: manual/rollback.md
+      - Troubleshooting: manual/troubleshooting.md
+  - Reference:
+      - Architecture: architecture.md
+      - Adapter protocol: adapter-protocol.md
+      - Anti-patterns: anti-patterns.md
+      - Roadmap: roadmap.md
+      - Status JSON schema: status-json-schema.md
+      - Semver contract: semver-contract.md
+      - Wizard: wizard.md
+  - Operations:
+      - First-fork checklist: first-fork-checklist.md
+      - Public flip checklist: public-flip-checklist.md
+      - Origin feature gap: origin-feature-gap-2026-04-24.md
+      - Plan: PLAN.md
+  - Runbooks:
+      - Install: runbooks/install.md
+      - Release: runbooks/release.md
+      - Rollback: runbooks/rollback.md
+      - Troubleshoot: runbooks/troubleshoot.md
+      - Upgrade: runbooks/upgrade.md
+  - Release notes:
+      - Index: release-notes/index.md
+      - v0.1.0b1: release-notes/v0.1.0b1.md
+      - v0.1.0a6: release-notes/v0.1.0a6.md
+      - v0.1.0a5: release-notes/v0.1.0a5.md
+      - v0.1.0a4: release-notes/v0.1.0a4.md
+      - v0.1.0a3: release-notes/v0.1.0a3.md
+      - v0.1.0a2: release-notes/v0.1.0a2.md
+      - v0.1.0a1: release-notes/v0.1.0a1.md
+      - v0.0.0: release-notes/v0.0.0.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/escotilha/oxi
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/oxi-core/

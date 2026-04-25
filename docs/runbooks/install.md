@@ -313,7 +313,7 @@ OXI_ADAPTER=oxi_adapter_my_app:Adapter oxi status
 
 ### Zero tasks after tick
 
-Run `oxi v3 plan --dry-run` and check the item count. If it is 0, the roadmap format is wrong — see [Step 5](#step-5--write-your-roadmap). If it is non-zero but tasks are not seeding, check `oxi status` for a `budget_hard_stop` event that may be blocking dispatch.
+Run `oxi v3 plan --dry-run` and check the item count. If it is 0, the roadmap format is wrong — see [Step 5](#step-5-write-your-roadmap). If it is non-zero but tasks are not seeding, check `oxi status` for a `budget_hard_stop` event that may be blocking dispatch.
 
 ### Budget hard-stop
 

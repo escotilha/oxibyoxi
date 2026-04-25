@@ -242,7 +242,7 @@ scripts/release.sh oxi-core --test
 - **Do not `--no-verify` the commit hooks to speed up a hotfix.** The hooks
   exist to catch the class of mistake that caused the incident. They take
   seconds; skipping them re-exposes the risk. See
-  [anti-patterns §9](../anti-patterns.md#9-no---no-verify-no---force-push-to-shared-branches).
+  [anti-patterns §9](../anti-patterns.md#9-no-no-verify-no-force-push-to-shared-branches).
 - **Do not push a release directly from a dirty working tree.** `scripts/release.sh`
   enforces a clean tree; do not work around this check.
 - **Do not embed the version string in source code.** The `0.1.0a1` incident

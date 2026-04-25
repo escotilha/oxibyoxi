@@ -16,7 +16,7 @@ oxi dashboard --port 9000       # custom port (default: 8765)
 oxi dashboard --hours 48        # show events from last 48h (default: 24)
 ```
 
-The dashboard binds to `127.0.0.1` by default and is accessible only from the local machine. This is intentional — see [Safety rails — dashboard](safety-rails.md#dashboard).
+The dashboard binds to `127.0.0.1` by default and is accessible only from the local machine. This is intentional — see [Safety rails — dashboard](safety-rails.md#dashboard-is-localhost-only).
 
 ## What the dashboard shows
 
