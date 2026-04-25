@@ -805,6 +805,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from oxi_core.v3.logging_setup import configure_logging
+
+    configure_logging()
     argv = argv if argv is not None else sys.argv[1:]
     parser = _build_parser()
 
