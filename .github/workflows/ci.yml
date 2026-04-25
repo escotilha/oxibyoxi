@@ -94,6 +94,12 @@ jobs:
       - name: Ruff (self adapter)
         working-directory: adapters/_self
         run: ruff check .
+      - name: Mypy strict (allow-listed modules)
+        working-directory: oxi-core
+        # The mypy strict policy is enforced per-module via tool.mypy
+        # overrides in pyproject.toml. Adding a module to the strict
+        # list is a one-way ratchet: regressions fail this step.
+        run: mypy src/oxi_core/adapter.py src/oxi_core/db.py src/oxi_core/v3/notification.py
       - name: Pytest (oxi-core)
         working-directory: oxi-core
         run: pytest -q

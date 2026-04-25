@@ -319,12 +319,13 @@ def _load_from_env(spec: str) -> Adapter:
             f"{_ENV_VAR}: module {module_path!r} has no attribute {class_name!r}"
         ) from exc
     try:
-        return cls()
+        instance: Adapter = cls()
     except TypeError as exc:
         raise AdapterLoadError(
             f"{_ENV_VAR}: {class_name}() raised TypeError — does it require "
             f"constructor arguments? ({exc})"
         ) from exc
+    return instance
 
 
 def load_adapter() -> None:
