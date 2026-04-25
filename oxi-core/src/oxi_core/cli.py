@@ -6,6 +6,9 @@ Commands:
     oxi status [--json]         task + event summary (plan tier shown first)
     oxi v3 tick [--times N]     run N dispatch/heartbeat/pr_watcher/auto_merge cycles
     oxi v3 status [--json]      alias for `status`
+    oxi v3 saturate [--concurrency N] [--max-cost-per-day USD]
+                                continuous-dispatch supervisor: loops ingest → observe
+                                → seed → dispatch until budget/killswitch/SIGTERM stops it
     oxi v3 plan --dry-run       parse the roadmap and print what was found (no DB write)
     oxi v3 kill [--reason R] [-y]   create the killswitch file (prompts unless -y)
     oxi v3 unkill [-y]              remove the killswitch file (prompts unless -y)
@@ -605,6 +608,80 @@ def _run_real_claude_tick(conn, state, health, adapter) -> None:
         print(merge_line)
 
 
+def cmd_saturate(args: argparse.Namespace) -> int:
+    """Continuous-dispatch supervisor loop.
+
+    Runs ingest → auto_observe → seed → dispatch_loop on every iteration
+    until one of the following stops it:
+
+    - Daily budget cap is reached (``--max-cost-per-day``).
+    - The adapter's hard cap is hit (``budget.check()`` → HARD_STOP).
+    - The killswitch file is set (``oxi v3 kill``).
+    - SIGTERM is received (waits for in-flight workers, then exits).
+
+    Writes a PID file at ``<repo_root>/.oxi/saturate.pid``; refuses to
+    start if a live process already holds that file.
+
+    Exit codes:
+        0 — clean stop (budget / killswitch / SIGTERM).
+        1 — error stop (engine unhealthy, fatal infrastructure error).
+        2 — refused to start (live saturate instance already running).
+    """
+    _require_adapter()
+    adapter = get_active_adapter()
+
+    from .v3 import saturate as sat_mod
+
+    repo_root_str = adapter.paths().repo_root or "."
+    repo_root = Path(repo_root_str)
+    oxi_dir = adapter.paths().oxi_dir
+
+    # Guard: refuse to start if a live saturate PID already exists.
+    pid_file = sat_mod.pid_path(repo_root, oxi_dir)
+    live, existing_pid = sat_mod.check_pid_file(pid_file)
+    if live:
+        _print_err(
+            f"oxi: saturate is already running (pid={existing_pid}, "
+            f"pid_file={pid_file}).\n"
+            "  Stop it first with SIGTERM, then retry."
+        )
+        raise SystemExit(2)
+
+    anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
+    max_cost = getattr(args, "max_cost_per_day", None)
+
+    print(
+        f"oxi: saturate starting "
+        f"(concurrency={args.concurrency}"
+        f"{f', max_cost_per_day=${max_cost:.2f}' if max_cost else ''})"
+    )
+    print(f"  pid_file: {pid_file}")
+    print("  stop: SIGTERM / oxi v3 kill / budget cap")
+
+    handle = connect()
+    try:
+        report = asyncio.run(
+            sat_mod.run(
+                conn=handle.connection,
+                concurrency=args.concurrency,
+                max_cost_per_day_usd=max_cost,
+                repo_root=repo_root,
+                oxi_dir=oxi_dir,
+                anthropic_api_key=anthropic_api_key,
+            )
+        )
+    finally:
+        handle.connection.close()
+
+    print(
+        f"oxi: saturate stopped "
+        f"(reason={report.stop_reason}, "
+        f"iterations={report.iterations}, "
+        f"dispatched={report.total_dispatched})"
+    )
+    return report.exit_code
+
+
 def cmd_plan(args: argparse.Namespace) -> int:
     """Parse the roadmap and report what was found.  Does NOT touch the DB.
 
@@ -810,6 +887,36 @@ def _build_parser() -> argparse.ArgumentParser:
              "Off by default.",
     )
     p_v3_tick.set_defaults(func=cmd_tick)
+
+    p_v3_saturate = p_v3_sub.add_parser(
+        "saturate",
+        help=(
+            "continuous-dispatch supervisor: loops ingest → observe → seed → "
+            "dispatch until a budget cap, killswitch, or SIGTERM stops it"
+        ),
+    )
+    p_v3_saturate.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="max simultaneous dispatches per iteration (default: 1)",
+    )
+    p_v3_saturate.add_argument(
+        "--max-cost-per-day",
+        type=float,
+        default=None,
+        metavar="USD",
+        dest="max_cost_per_day",
+        help=(
+            "hard spend ceiling for the current UTC day in USD. "
+            "When today's task cost reaches this value the loop exits "
+            "cleanly and emits a daily_budget_reached event. "
+            "Stacks on top of (i.e. can only be tighter than) the "
+            "adapter's own daily_hard_cap."
+        ),
+    )
+    p_v3_saturate.set_defaults(func=cmd_saturate)
 
     p_v3_plan = p_v3_sub.add_parser(
         "plan",

@@ -128,6 +128,14 @@ class LedgerEvent(StrEnum):
     # Summary event at the end of a seed pass.
     SEED_PASS_COMPLETE = auto()
 
+    # --- saturate -----------------------------------------------------------
+    # Continuous-dispatch supervisor started.
+    SATURATE_STARTED = auto()
+    # Continuous-dispatch supervisor stopped (any reason).
+    SATURATE_STOPPED = auto()
+    # Daily budget ceiling passed to ``--max-cost-per-day`` was reached.
+    DAILY_BUDGET_REACHED = auto()
+
     # --- deadman (dynamic prefix) -------------------------------------------
     # These are composed at runtime as ``deadman_<level.value>``.
     # The prefix constant lets callers build the kind from a typed root.
