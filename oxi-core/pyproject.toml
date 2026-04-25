@@ -60,7 +60,7 @@ where = ["src"]
 include = ["oxi_core*"]
 
 [tool.setuptools.package-data]
-"oxi_core" = ["skills/_bundled/**/*", "templates/**/*"]
+"oxi_core" = ["skills/_bundled/**/*", "templates/**/*", "defaults/**/*"]
 
 [tool.ruff]
 line-length = 100
@@ -104,6 +104,7 @@ module = [
   "oxi_core.v3.oauth_watch",
   "oxi_core.v3.skills_loader",
   "oxi_core.v3.tail_dispatch",
+  "oxi_core.v3.routing",
 ]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true

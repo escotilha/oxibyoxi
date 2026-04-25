@@ -1,0 +1,56 @@
+# routing.yaml — default model-routing table for oxi-core
+#
+# Schema
+# ------
+# Each top-level key is a *role* string (e.g. "worker", "critic").
+# Roles are looked up by ``oxi_core.v3.routing.route_for(role)``.
+#
+# Fields per role (all required unless marked optional):
+#
+#   adapter_name  (str)  — logical adapter identifier, e.g. "anthropic".
+#                          Passed through to the dispatch layer; not
+#                          validated against installed adapters here.
+#
+#   model_id      (str)  — canonical model string forwarded to the
+#                          adapter, e.g. "claude-opus-4-7".
+#
+#   fallback_chain (list[str], optional)
+#                       — ordered list of model_ids to try when the
+#                         primary model is unavailable (rate-limit,
+#                         capacity error, etc.). First element is tried
+#                         first.  Empty list means "no fallback".
+#
+# Adding a new role
+# -----------------
+# 1. Add a stanza below with adapter_name, model_id, and (optionally)
+#    fallback_chain.
+# 2. Add a test in tests/test_routing.py asserting the expected ModelChoice.
+# 3. No code changes required — route_for() reads this file at startup
+#    and caches the table for the lifetime of the process.
+#
+# Env-var overrides are NOT supported here (deferred to T2-40).
+# Fork operators who need different routing should provide their own
+# routing.yaml via the adapter's data-files extension point (TBD).
+
+worker:
+  adapter_name: anthropic
+  model_id: claude-opus-4-7
+  fallback_chain:
+    - claude-sonnet-4-6
+    - claude-haiku-4-5-20251001
+
+critic:
+  adapter_name: anthropic
+  model_id: claude-sonnet-4-6
+  fallback_chain:
+    - claude-haiku-4-5-20251001
+
+heartbeat-triage:
+  adapter_name: anthropic
+  model_id: claude-haiku-4-5-20251001
+  fallback_chain: []
+
+prompt-injection-screen:
+  adapter_name: anthropic
+  model_id: claude-haiku-4-5-20251001
+  fallback_chain: []
