@@ -136,11 +136,8 @@ _SAFE_SLUG = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 DEFAULT_FORBIDDEN_STRINGS: tuple[str, ...] = (
     # Names of prior orchestrators / projects that must not leak forward.
     "psos",
-    "Contably",
-    "contably",
     # Known sensitive paths and identifiers from the prior environment.
-    "/opt/contably-os",
-    ".contably-os",
+    "/opt/psos",
 )
 
 

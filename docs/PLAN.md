@@ -322,11 +322,11 @@ Because oxi's origin involves studying an existing private codebase, the risk is
 
 ## 10. Decisions locked in
 
-1. **Fresh product, no cutover, no Contably mention ever.** Confirmed.
+1. **Fresh product, no cutover, no PS mention ever.** Confirmed.
 2. **PyPI distribution.** Confirmed. `oxi-core` and `oxi-adapter-*` names reserved on PyPI at Phase 0.
 3. **Operator owns 14-day observation windows.** Confirmed.
 4. **Sanitization is a release gate, not a nice-to-have.** Confirmed via Section 8.
-5. **Contably OS stays exactly as it is.** Not touched. Not replaced. Not referenced.
+5. **PS OS stays exactly as it is.** Not touched. Not replaced. Not referenced.
 
 ## 11. Immediate next action
 

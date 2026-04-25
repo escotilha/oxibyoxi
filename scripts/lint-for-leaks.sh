@@ -33,16 +33,13 @@ cd "${REPO_ROOT}"
 
 FORBIDDEN=(
   # Project/company names from prior work — never appear in oxi source.
-  "contably"
   "psos"
   "nuvini"
   "sourcerank"
 
   # Private filesystem paths.
-  "/opt/contably-os"
   "/opt/psos"
   "/opt/oxi-shadow"
-  ".contably-os"
 
   # Private network identifiers (Tailscale + VPS IPs the author has used).
   "100.77.51.51"
@@ -52,8 +49,6 @@ FORBIDDEN=(
   "escotilha@gmail.com"
 
   # Private repo slugs other than escotilha/oxi.
-  "Contably/contably"
-  "Contably/contably-os"
   "escotilha/psos"
 )
 

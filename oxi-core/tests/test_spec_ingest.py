@@ -169,7 +169,7 @@ def test_parse_spec_rejects_forbidden_in_subtitle():
 
 - id: leak
   title: a clean title
-  subtitle: based on contably-os patterns
+  subtitle: based on /opt/psos patterns
 """
     with pytest.raises(SpecIngestError, match="forbidden string"):
         parse_spec(spec)
