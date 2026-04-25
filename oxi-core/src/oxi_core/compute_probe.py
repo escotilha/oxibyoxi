@@ -59,10 +59,19 @@ from dataclasses import dataclass
 #: Approximate resident memory of a single claude-code worker, GB.
 WORKER_MEM_GB: float = 1.5
 
-#: Floor for concurrency derived from RAM. Even on a 64 GB machine
-#: we don't recommend more than 10 because that's the hardware
-#: envelope the dogfood loop validated.
-HARDWARE_CONCURRENCY_CEILING: int = 10
+#: Ceiling for concurrency derived from RAM. Bumped from 10 (the
+#: original validated envelope) to 20 once the dogfood loop proved
+#: stable with parallel dispatch. The actual cap at runtime is
+#: min(ceiling, free_ram_gb / WORKER_MEM_GB) so we never overcommit
+#: a machine with less RAM than the ceiling implies.
+HARDWARE_CONCURRENCY_CEILING: int = 20
+
+#: Reserved RAM (GB) we never let workers consume. Covers OS,
+#: the engine itself, dashboard, sshd, and any user processes the
+#: operator is running on the same host. 8 GB is generous enough
+#: that a 16 GB machine still gets ~5 concurrent slots without
+#: paging.
+RAM_RESERVED_GB: float = 8.0
 
 #: Default budget caps when the probe can't determine plan tier.
 DEFAULT_DAILY_SOFT_WARN_USD: float = 5.0
@@ -348,3 +357,107 @@ __all__ = [
     "probe_host",
     "recommend",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Live free-RAM probe — used by SelfAdapter.dispatch_hosts() to size
+# concurrency at tick time, not at install time
+# ---------------------------------------------------------------------------
+
+
+def _free_ram_gb_macos() -> float | None:
+    """Read free + inactive pages from `vm_stat`. Returns GB or None.
+
+    macOS `vm_stat` reports pages of 4096 bytes. "Free" + "Inactive"
+    is the closest to "memory the kernel can hand out without paging."
+    """
+    try:
+        out = subprocess.check_output(
+            ["vm_stat"], text=True, stderr=subprocess.DEVNULL
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+    page_size = 4096
+    free_pages = 0
+    inactive_pages = 0
+    for line in out.splitlines():
+        if "page size of" in line:
+            # Format: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+            try:
+                page_size = int(line.split("page size of")[1].split()[0])
+            except (IndexError, ValueError):
+                pass
+        if line.startswith("Pages free:"):
+            try:
+                free_pages = int(line.split(":")[1].strip().rstrip("."))
+            except ValueError:
+                return None
+        elif line.startswith("Pages inactive:"):
+            try:
+                inactive_pages = int(line.split(":")[1].strip().rstrip("."))
+            except ValueError:
+                return None
+    bytes_free = (free_pages + inactive_pages) * page_size
+    return bytes_free / (1024**3) if bytes_free > 0 else None
+
+
+def _free_ram_gb_linux() -> float | None:
+    """Read MemAvailable from /proc/meminfo. Returns GB or None.
+
+    MemAvailable is what the kernel can give to a new process
+    without swapping — exactly what we want to budget against.
+    """
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        try:
+                            return int(parts[1]) / (1024**2)  # kB → GB
+                        except ValueError:
+                            return None
+    except OSError:
+        return None
+    return None
+
+
+def probe_free_ram_gb() -> float | None:
+    """Best-effort live free-RAM probe.
+
+    Returns None on platforms we don't recognize or when probing
+    fails (sandboxed env, missing binary, etc). Callers should fall
+    back to a static cap when None.
+    """
+    import platform
+    name = platform.system().lower()
+    if name == "darwin":
+        return _free_ram_gb_macos()
+    if name == "linux":
+        return _free_ram_gb_linux()
+    return None
+
+
+def recommend_ram_concurrency(
+    *,
+    ceiling: int = HARDWARE_CONCURRENCY_CEILING,
+    reserved_gb: float = RAM_RESERVED_GB,
+    worker_gb: float = WORKER_MEM_GB,
+    free_gb: float | None = None,
+) -> int:
+    """Concurrency that fits in available RAM with headroom.
+
+    Formula: max(1, min(ceiling, floor((free_gb - reserved) / worker_gb)))
+
+    When ``free_gb`` is None and the live probe also fails, returns 1
+    — the safest default. The caller should log the fallback so
+    operators can see why concurrency is conservative.
+    """
+    if free_gb is None:
+        free_gb = probe_free_ram_gb()
+    if free_gb is None:
+        return 1
+    usable = max(0.0, free_gb - reserved_gb)
+    headroom_slots = int(usable / worker_gb)
+    return max(1, min(ceiling, headroom_slots))

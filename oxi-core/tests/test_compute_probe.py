@@ -8,7 +8,6 @@ import pytest
 
 from oxi_core.compute_probe import (
     DEFAULT_DAILY_HARD_CAP_USD,
-    HARDWARE_CONCURRENCY_CEILING,
     PLAN_TIER_CONCURRENCY,
     PLAN_TIER_HARD_CAPS,
     HostCapacity,
@@ -238,7 +237,10 @@ def test_recommend_max20x_with_48gb_recommends_full_envelope():
         ram_gb=48.0, cpu_cores=10, plan_tier="max_20x", platform_name="Darwin"
     )
     rec = recommend(capacity)
-    assert rec.max_concurrent == HARDWARE_CONCURRENCY_CEILING  # ceiling at 10
+    # 48 GB / (1.5 * 2) = 16 ram envelope; plan tier max_20x = 10;
+    # ceiling = 20 (raised from 10 once parallel dispatch landed).
+    # min(10, 16, 20) = 10 — plan-tier-bound on a roomy 48 GB box.
+    assert rec.max_concurrent == PLAN_TIER_CONCURRENCY["max_20x"]
     assert rec.daily_hard_cap_usd == PLAN_TIER_HARD_CAPS["max_20x"]
 
 

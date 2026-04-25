@@ -1,10 +1,10 @@
 """SelfAdapter — oxi operating on its own repo.
 
-Conservative by design:
+Configured for serious dogfood throughput:
   - auto_merge=True (engine PRs merge after critic + CI green)
-  - daily_hard_cap=$20 (runaway loop halts)
-  - max_concurrent=1 (no fan-out)
-  - plan_tier="20x" (Max plan, see memory:tech-insight-psos-plan-tier-20x)
+  - daily_hard_cap=$100 (Pierre's directive, hard-coded for dogfood)
+  - max_concurrent: probed from free RAM at tick time (1..20 slots)
+  - plan_tier="20x" (Max plan)
 
 Forks should NOT copy this adapter. Fork authors write their own adapter
 against the reference pattern.
@@ -12,6 +12,7 @@ against the reference pattern.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,9 @@ from oxi_core.adapter import (
     PathsConfig,
     PromoteRecipe,
 )
+from oxi_core.compute_probe import recommend_ram_concurrency
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -59,9 +63,13 @@ class SelfAdapter:
     # ---- Budget ----
 
     def budget(self) -> BudgetCaps:
+        # Hard-coded $100/day per Pierre's directive 2026-04-25 once
+        # parallel dispatch + auto_merge + 22-item plan ingest landed.
+        # The soft-warn at $25 lets the dashboard flag pressure before
+        # the hard-stop kicks in.
         return BudgetCaps(
-            daily_soft_warn=5.0,
-            daily_hard_cap=20.0,
+            daily_soft_warn=25.0,
+            daily_hard_cap=100.0,
             per_task_opus=2.0,
             per_task_sonnet=0.50,
         )
@@ -80,21 +88,43 @@ class SelfAdapter:
     # ---- Dispatch ----
 
     def dispatch_hosts(self) -> tuple[DispatchHost, ...]:
-        # Operator target: 10 concurrent dispatches. Mac Mini M4 Pro
-        # with 48 GB RAM handles this comfortably (each claude session
-        # is ~1–2 GB resident). Plan tier is 20x — rate limits are not
-        # the bottleneck. Daily hard-cap ($20 in budget()) still
-        # bounds runaway dispatches — 10 parallel * $0.70/dispatch ≈
-        # $7/wave, so ~3 waves before hard-stop.
+        # Concurrency is *probed* at every call, not hardcoded.
+        # `recommend_ram_concurrency` reads live free RAM (vm_stat on
+        # macOS, /proc/meminfo MemAvailable on Linux), reserves
+        # RAM_RESERVED_GB (default 8 GB) for OS + dashboard + IDE,
+        # and divides what's left by WORKER_MEM_GB (default 1.5 GB)
+        # to get a slot count. Capped at HARDWARE_CONCURRENCY_CEILING
+        # (default 20).
         #
-        # Future: T3-2 compute-aware onboarding will probe the host
-        # and recommend this number automatically. Hand-set here
-        # because the operator explicitly wanted 10.
+        # If the probe fails (sandboxed env, unrecognized platform),
+        # falls back to 1 — never silently runs more than the
+        # operator's machine can comfortably handle.
+        #
+        # Operator override: set OXI_MAX_CONCURRENT in the engine's
+        # environment to force a specific value, bypassing the probe.
+        import os
+        forced = os.environ.get("OXI_MAX_CONCURRENT")
+        if forced:
+            try:
+                max_concurrent = max(1, int(forced))
+                logger.info(
+                    "self_adapter.concurrency.forced",
+                    extra={"max_concurrent": max_concurrent},
+                )
+            except ValueError:
+                max_concurrent = recommend_ram_concurrency()
+        else:
+            max_concurrent = recommend_ram_concurrency()
+            logger.info(
+                "self_adapter.concurrency.probed",
+                extra={"max_concurrent": max_concurrent},
+            )
+
         return (
             DispatchHost(
                 name="local",
                 ssh_alias=None,
-                max_concurrent=10,
+                max_concurrent=max_concurrent,
                 worktree_root=str(self.repo_root / ".oxi" / "worktrees"),
             ),
         )
