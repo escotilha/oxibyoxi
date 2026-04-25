@@ -29,7 +29,7 @@ permissions:
 jobs:
   lint-for-leaks:
     name: lint-for-leaks (forbidden strings)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oxi-vps]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Run leak-lint
@@ -37,7 +37,7 @@ jobs:
 
   gitleaks:
     name: gitleaks (secret patterns)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oxi-vps]
     # gitleaks-action needs pull-requests: write to annotate the PR with
     # findings; without it the action crashes with "Resource not accessible
     # by integration". Scoped to this job only — other jobs stay at the
@@ -58,7 +58,7 @@ jobs:
 
   python:
     name: python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oxi-vps]
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +99,7 @@ jobs:
 
   first-fork-smoke:
     name: first-fork smoke (wheel → oxi init → tick)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oxi-vps]
     # Security review:
     #   - No ${{ github.event.* }} interpolation anywhere in run: blocks.
     #   - The smoke script uses only static paths inside a mktemp workspace.
@@ -121,7 +121,7 @@ jobs:
 
   pip-audit:
     name: pip-audit (dependency CVEs)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oxi-vps]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Set up Python 3.12
@@ -151,7 +151,7 @@ jobs:
 
   bandit:
     name: bandit (Python SAST)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, oxi-vps]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Set up Python 3.12
