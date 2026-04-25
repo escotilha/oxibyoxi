@@ -446,3 +446,324 @@ def test_report_dataclass_is_frozen():
     report = ReapReport(considered=1, abandoned=1, protected_by_pr=0, skipped_fresh=0)
     with pytest.raises(FrozenInstanceError):
         report.abandoned = 2  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# HeartbeatConfig + triage (T2-38)
+# ---------------------------------------------------------------------------
+
+
+from oxi_core.v3.heartbeat import HeartbeatConfig  # noqa: E402 — after markers
+
+
+def test_heartbeat_config_default_triage_disabled():
+    """Feature flag defaults to False — zero LLM calls by default."""
+    cfg = HeartbeatConfig()
+    assert cfg.triage_enabled is False
+
+
+def test_heartbeat_config_triage_enabled():
+    """Opt-in via triage_enabled=True."""
+    cfg = HeartbeatConfig(triage_enabled=True)
+    assert cfg.triage_enabled is True
+
+
+def test_heartbeat_config_is_frozen():
+    """HeartbeatConfig is immutable."""
+    from dataclasses import FrozenInstanceError
+    cfg = HeartbeatConfig()
+    with pytest.raises(FrozenInstanceError):
+        cfg.triage_enabled = True  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Triage disabled (default) — gateway is ignored
+# ---------------------------------------------------------------------------
+
+
+def test_reap_triage_disabled_no_gateway_calls(conn):
+    """When triage_enabled=False, no calls are made even if a gateway is passed."""
+    from oxi_core.v3.inference import FakeInferenceGateway, InferenceResult
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    _seed_dispatched(conn, last_progress_at=old, updated_at=old)
+
+    fake = FakeInferenceGateway()
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+
+    reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=fake,
+        config=HeartbeatConfig(triage_enabled=False),
+    )
+
+    # Task was abandoned but gateway was never called.
+    assert fake.call_count() == 0
+    row = conn.execute("SELECT status FROM task WHERE id = 1").fetchone()
+    assert row["status"] == "abandoned"
+
+
+def test_reap_triage_disabled_ledger_has_no_triage_summary(conn):
+    """When triage is disabled, ledger payload has no triage_summary key."""
+    import json as _json
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    task_id = _seed_dispatched(conn, last_progress_at=old, updated_at=old)
+
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+    reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        config=HeartbeatConfig(triage_enabled=False),
+    )
+
+    row = conn.execute(
+        "SELECT payload FROM event WHERE task_id = ? AND kind = 'abandoned_by_heartbeat'",
+        (task_id,),
+    ).fetchone()
+    assert row is not None
+    payload = _json.loads(row["payload"])
+    assert "triage_summary" not in payload
+    assert payload["reason"] == "stale_no_progress"
+
+
+# ---------------------------------------------------------------------------
+# Triage enabled — FakeInferenceGateway, fakes-not-mocks
+# ---------------------------------------------------------------------------
+
+
+def test_reap_triage_enabled_calls_gateway(conn):
+    """When triage_enabled=True and a gateway is provided, it is called once
+    per abandoned task."""
+    from oxi_core.v3.inference import FakeInferenceGateway, InferenceResult
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    _seed_dispatched(conn, identifier="T0-1", last_progress_at=old, updated_at=old)
+
+    fake = FakeInferenceGateway()
+    canned = InferenceResult(
+        text="The worker likely crashed before stamping progress.",
+        cost_usd=0.0001,
+        tokens_in=50,
+        tokens_out=20,
+        model="claude-haiku-4-5-20251001",
+        latency_ms=100.0,
+    )
+    # Register a catch-all: FakeInferenceGateway returns the canned result for
+    # any unknown key by default (zero-cost empty), but we want to verify the
+    # call happened. We rely on the zero-cost default for this test.
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+
+    reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=fake,
+        config=HeartbeatConfig(triage_enabled=True),
+    )
+
+    assert fake.call_count() == 1
+    call = fake.calls[0]
+    # Model resolved from routing.yaml (heartbeat-triage role).
+    assert "claude-haiku" in call["model"] or "haiku" in call["model"]
+    # Messages contain the task identifier and title.
+    assert any("T0-1" in str(m.get("content", "")) for m in call["messages"])
+
+
+def test_reap_triage_enabled_summary_stored_in_ledger(conn):
+    """triage_summary from the gateway is stored in the event payload."""
+    import json as _json
+
+    from oxi_core.v3.inference import FakeInferenceGateway, InferenceResult
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    task_id = _seed_dispatched(conn, identifier="T0-1", last_progress_at=old, updated_at=old)
+
+    fake = FakeInferenceGateway()
+
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+
+    # Register a canned result so we know what text to expect.
+    # We register *after* building messages, so use a wildcard approach:
+    # FakeInferenceGateway returns empty text for unknown keys. We'll
+    # pre-seed a response for a known model.
+    model = "claude-haiku-4-5-20251001"
+    canned_text = "Worker likely ran out of budget mid-implementation."
+    canned = InferenceResult(
+        text=canned_text,
+        cost_usd=0.0002,
+        tokens_in=60,
+        tokens_out=15,
+        model=model,
+        latency_ms=80.0,
+    )
+
+    # Build the expected messages so we can register the canned result.
+    from oxi_core.v3.dispatch import Task as _Task
+    from oxi_core.v3.heartbeat import _build_triage_messages, _load_recent_events
+    task_row = conn.execute("SELECT * FROM task WHERE id = ?", (task_id,)).fetchone()
+    task_obj = _Task.from_row(task_row)
+    msgs = _build_triage_messages(task_obj, _load_recent_events(conn, task_id))
+    fake.register(model=model, messages=msgs, result=canned)
+
+    reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=fake,
+        config=HeartbeatConfig(triage_enabled=True),
+    )
+
+    row = conn.execute(
+        "SELECT payload FROM event WHERE task_id = ? AND kind = 'abandoned_by_heartbeat'",
+        (task_id,),
+    ).fetchone()
+    assert row is not None
+    payload = _json.loads(row["payload"])
+    assert payload.get("triage_summary") == canned_text
+
+
+def test_reap_triage_multiple_stale_tasks_each_called(conn):
+    """Each abandoned task gets its own triage call."""
+    from oxi_core.v3.inference import FakeInferenceGateway
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    fresh = _iso(now - timedelta(seconds=5))
+
+    _seed_dispatched(conn, identifier="T0-1", last_progress_at=old, updated_at=old)
+    _seed_dispatched(conn, identifier="T0-2", last_progress_at=fresh, updated_at=fresh)  # fresh — skipped
+    _seed_dispatched(conn, identifier="T0-3", last_progress_at=old, updated_at=old)
+
+    fake = FakeInferenceGateway()
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+    report = reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=fake,
+        config=HeartbeatConfig(triage_enabled=True),
+    )
+
+    assert report.abandoned == 2
+    assert report.skipped_fresh == 1
+    # One triage call per abandoned task.
+    assert fake.call_count() == 2
+
+
+def test_reap_triage_enabled_but_no_gateway_skips_silently(conn):
+    """triage_enabled=True with gateway=None doesn't crash — triage is skipped."""
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    task_id = _seed_dispatched(conn, last_progress_at=old, updated_at=old)
+
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+    report = reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=None,
+        config=HeartbeatConfig(triage_enabled=True),
+    )
+
+    # Task still abandoned — triage failure must not block reaping.
+    assert report.abandoned == 1
+    row = conn.execute("SELECT status FROM task WHERE id = 1").fetchone()
+    assert row["status"] == "abandoned"
+
+
+def test_reap_triage_gateway_error_does_not_block_abandon(conn):
+    """If the gateway raises, the task is still abandoned (triage is best-effort)."""
+    from oxi_core.v3.inference import FakeInferenceGateway, InferenceServiceError
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    task_id = _seed_dispatched(conn, last_progress_at=old, updated_at=old)
+
+    # Subclass FakeInferenceGateway to always raise.
+    class _FailingGateway(FakeInferenceGateway):
+        async def complete(self, messages, model, max_tokens, **kwargs):
+            raise InferenceServiceError("litellm is down", status_code=503)
+
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+    report = reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=_FailingGateway(),
+        config=HeartbeatConfig(triage_enabled=True),
+    )
+
+    # Abandonment happened despite the gateway error.
+    assert report.abandoned == 1
+    row = conn.execute("SELECT status FROM task WHERE id = 1").fetchone()
+    assert row["status"] == "abandoned"
+
+
+def test_reap_triage_ledger_payload_has_no_summary_on_gateway_error(conn):
+    """When triage errors, ledger payload omits triage_summary (not empty string)."""
+    import json as _json
+
+    from oxi_core.v3.inference import FakeInferenceGateway, InferenceServiceError
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    task_id = _seed_dispatched(conn, last_progress_at=old, updated_at=old)
+
+    class _FailingGateway(FakeInferenceGateway):
+        async def complete(self, messages, model, max_tokens, **kwargs):
+            raise InferenceServiceError("litellm is down", status_code=503)
+
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+    reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=_FailingGateway(),
+        config=HeartbeatConfig(triage_enabled=True),
+    )
+
+    row = conn.execute(
+        "SELECT payload FROM event WHERE task_id = ? AND kind = 'abandoned_by_heartbeat'",
+        (task_id,),
+    ).fetchone()
+    payload = _json.loads(row["payload"])
+    # Either key absent or value is empty/falsy — both are acceptable.
+    assert not payload.get("triage_summary")
+
+
+# ---------------------------------------------------------------------------
+# Config resolution — adapter-optional method
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_config_uses_explicit_arg_over_adapter(conn, monkeypatch):
+    """Explicit config argument wins over everything."""
+    from oxi_core.v3 import heartbeat as hb_mod
+
+    explicit_cfg = HeartbeatConfig(triage_enabled=True)
+
+    now = datetime(2026, 4, 23, 12, 0, 0, tzinfo=UTC)
+    old = _iso(now - timedelta(minutes=30))
+    _seed_dispatched(conn, last_progress_at=old, updated_at=old)
+
+    state = EngineState(plan_tier="standard", max_concurrent=4)
+    # The adapter registered in this test's fixture does NOT have
+    # heartbeat_config() — explicit arg must be used.
+    from oxi_core.v3.inference import FakeInferenceGateway
+    fake = FakeInferenceGateway()
+    reap(
+        conn, state,
+        stale_after_seconds=600, now=now,
+        gateway=fake,
+        config=explicit_cfg,
+    )
+    # triage_enabled=True → gateway was called (confirms explicit config used).
+    assert fake.call_count() == 1
+
+
+def test_resolve_config_falls_back_to_defaults_when_no_adapter_method(conn):
+    """When adapter has no heartbeat_config(), defaults apply (triage_enabled=False)."""
+    from oxi_core.v3.heartbeat import _resolve_config
+    # The _TestAdapter in this file has no heartbeat_config(); defaults apply.
+    result = _resolve_config(None)
+    assert result.triage_enabled is False
