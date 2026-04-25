@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from oxi_core import adapter as adapter_mod
@@ -20,6 +22,7 @@ from oxi_core.adapter import (
     PromoteRecipe,
     RoadmapItem,
     clear_adapter,
+    find_oxi_toml,
     get_active_adapter,
     load_adapter,
     register_adapter,
@@ -410,3 +413,290 @@ def test_load_adapter_invalid_adapter_from_entry_point_raises(monkeypatch):
 
     with pytest.raises(InvalidAdapterError):
         load_adapter()
+
+
+# ---------------------------------------------------------------------------
+# oxi.toml loading — _load_from_toml / find_oxi_toml / load_adapter toml path
+# ---------------------------------------------------------------------------
+
+
+def _write_toml(path: Path, content: str) -> None:
+    """Write a TOML file at *path* (directory is created if needed)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content)
+
+
+def _make_fake_module(module_name: str, cls):
+    """Register *cls* under *module_name* in sys.modules and return a cleanup fn."""
+    import sys
+    import types
+
+    fake = types.ModuleType(module_name)
+    setattr(fake, cls.__name__, cls)
+    sys.modules[module_name] = fake
+    return lambda: sys.modules.pop(module_name, None)
+
+
+# ---- find_oxi_toml --------------------------------------------------------
+
+
+def test_find_oxi_toml_returns_none_when_absent(tmp_path: Path):
+    assert find_oxi_toml(tmp_path) is None
+
+
+def test_find_oxi_toml_returns_path_when_present(tmp_path: Path):
+    toml = tmp_path / "oxi.toml"
+    toml.write_text("[adapter]\nclass = \"mod:Cls\"\n")
+    result = find_oxi_toml(tmp_path)
+    assert result == toml
+
+
+# ---- load_adapter with oxi.toml — happy paths ----------------------------
+
+
+def test_load_adapter_toml_no_kwargs(tmp_path: Path, monkeypatch):
+    """[adapter] with only class= and no kwargs instantiates with no args."""
+    cleanup = _make_fake_module("_toml_nokwargs_mod", _MinimalAdapter)
+    try:
+        _write_toml(
+            tmp_path / "oxi.toml",
+            '[adapter]\nclass = "_toml_nokwargs_mod:_MinimalAdapter"\n',
+        )
+        monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+        monkeypatch.delenv("OXI_ADAPTER", raising=False)
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+        load_adapter()
+        assert isinstance(get_active_adapter(), _MinimalAdapter)
+    finally:
+        cleanup()
+
+
+def test_load_adapter_toml_with_kwargs(tmp_path: Path, monkeypatch):
+    """[adapter.kwargs] entries are forwarded to the constructor."""
+
+    class _KwargsAdapter(_MinimalAdapter):
+        def __init__(self, *, label: str = "default"):
+            self.label = label
+
+    cleanup = _make_fake_module("_toml_kwargs_mod", _KwargsAdapter)
+    try:
+        _write_toml(
+            tmp_path / "oxi.toml",
+            '[adapter]\nclass = "_toml_kwargs_mod:_KwargsAdapter"\n\n'
+            '[adapter.kwargs]\nlabel = "hello"\n',
+        )
+        monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+        monkeypatch.delenv("OXI_ADAPTER", raising=False)
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+        load_adapter()
+        loaded = get_active_adapter()
+        assert isinstance(loaded, _KwargsAdapter)
+        assert loaded.label == "hello"
+    finally:
+        cleanup()
+
+
+def test_load_adapter_toml_path_kwarg_resolved_relative_to_toml(
+    tmp_path: Path, monkeypatch
+):
+    """String kwargs ending with _root/_path/_dir are resolved relative to oxi.toml."""
+
+    class _PathAdapter(_MinimalAdapter):
+        def __init__(self, *, repo_root: str = ""):
+            self.repo_root = repo_root
+
+    cleanup = _make_fake_module("_toml_path_mod", _PathAdapter)
+    try:
+        _write_toml(
+            tmp_path / "oxi.toml",
+            '[adapter]\nclass = "_toml_path_mod:_PathAdapter"\n\n'
+            '[adapter.kwargs]\nrepo_root = "."\n',
+        )
+        monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+        monkeypatch.delenv("OXI_ADAPTER", raising=False)
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+        load_adapter()
+        loaded = get_active_adapter()
+        assert isinstance(loaded, _PathAdapter)
+        # repo_root="." relative to tmp_path → resolves to tmp_path itself
+        assert Path(loaded.repo_root) == tmp_path.resolve()
+    finally:
+        cleanup()
+
+
+def test_load_adapter_toml_wins_over_entry_points(tmp_path: Path, monkeypatch):
+    """oxi.toml is consulted before entry-point discovery."""
+    cleanup = _make_fake_module("_toml_wins_mod", _MinimalAdapter)
+    try:
+        _write_toml(
+            tmp_path / "oxi.toml",
+            '[adapter]\nclass = "_toml_wins_mod:_MinimalAdapter"\n',
+        )
+        monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+        monkeypatch.delenv("OXI_ADAPTER", raising=False)
+        # Two conflicting entry-points — would raise MultipleAdaptersError if used.
+        ep = _FakeEntryPoint("ep-a", "...:A", _MinimalAdapter)
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [ep, ep])
+
+        load_adapter()  # must NOT raise MultipleAdaptersError
+        assert isinstance(get_active_adapter(), _MinimalAdapter)
+    finally:
+        cleanup()
+
+
+def test_load_adapter_env_var_wins_over_toml(tmp_path: Path, monkeypatch):
+    """OXI_ADAPTER env var is resolved before oxi.toml is even read."""
+
+    class _TomlAdapter(_MinimalAdapter):
+        pass  # distinct type — we verify env var adapter is loaded, not this
+
+    cleanup_toml = _make_fake_module("_toml_env_wins_toml", _TomlAdapter)
+    cleanup_env = _make_fake_module("_toml_env_wins_env", _MinimalAdapter)
+    try:
+        _write_toml(
+            tmp_path / "oxi.toml",
+            '[adapter]\nclass = "_toml_env_wins_toml:_TomlAdapter"\n',
+        )
+        monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+        monkeypatch.setenv("OXI_ADAPTER", "_toml_env_wins_env:_MinimalAdapter")
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+        load_adapter()
+        loaded = get_active_adapter()
+        # Should be _MinimalAdapter (from env), not _TomlAdapter.
+        assert type(loaded).__name__ == "_MinimalAdapter"
+    finally:
+        cleanup_toml()
+        cleanup_env()
+
+
+# ---- load_adapter with oxi.toml — error paths ----------------------------
+
+
+def test_load_adapter_toml_missing_class_key_raises(tmp_path: Path, monkeypatch):
+    """[adapter] without 'class' key raises AdapterLoadError."""
+    _write_toml(tmp_path / "oxi.toml", "[adapter]\n# no class key\n")
+    monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+    with pytest.raises(AdapterLoadError, match="missing the 'class' key"):
+        load_adapter()
+
+
+def test_load_adapter_toml_bad_class_spec_raises(tmp_path: Path, monkeypatch):
+    """[adapter] class without colon raises AdapterLoadError."""
+    _write_toml(tmp_path / "oxi.toml", '[adapter]\nclass = "no_colon_here"\n')
+    monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+    with pytest.raises(AdapterLoadError, match="not a valid"):
+        load_adapter()
+
+
+def test_load_adapter_toml_bad_module_raises(tmp_path: Path, monkeypatch):
+    """[adapter] class pointing at non-existent module raises AdapterLoadError."""
+    _write_toml(
+        tmp_path / "oxi.toml",
+        '[adapter]\nclass = "oxi_no_such_module_xyz:Foo"\n',
+    )
+    monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+    with pytest.raises(AdapterLoadError, match="cannot import module"):
+        load_adapter()
+
+
+def test_load_adapter_toml_constructor_error_raises(tmp_path: Path, monkeypatch):
+    """Class that requires args but no kwargs in toml raises AdapterLoadError."""
+
+    class _NeedsArgs:
+        def __init__(self, required_arg):
+            pass
+
+    cleanup = _make_fake_module("_toml_ctor_err", _NeedsArgs)
+    try:
+        _write_toml(
+            tmp_path / "oxi.toml",
+            '[adapter]\nclass = "_toml_ctor_err:_NeedsArgs"\n',
+        )
+        monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+        monkeypatch.delenv("OXI_ADAPTER", raising=False)
+        monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+        with pytest.raises(AdapterLoadError, match="TypeError"):
+            load_adapter()
+    finally:
+        cleanup()
+
+
+def test_load_adapter_toml_no_adapter_section_falls_through(
+    tmp_path: Path, monkeypatch
+):
+    """oxi.toml without [adapter] section falls through to entry-point discovery."""
+    _write_toml(tmp_path / "oxi.toml", "# no [adapter] section\n[other]\nfoo = 1\n")
+    monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: tmp_path / "oxi.toml")
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [])
+
+    load_adapter()  # must not raise
+    with pytest.raises(AdapterNotRegisteredError):
+        get_active_adapter()
+
+
+def test_load_adapter_toml_absent_falls_through_to_entry_points(
+    tmp_path: Path, monkeypatch
+):
+    """When find_oxi_toml returns None, entry-point discovery runs normally."""
+    ep = _FakeEntryPoint("test-ep", "oxi_core.tests.test_adapter:_MinimalAdapter", _MinimalAdapter)
+    monkeypatch.setattr(adapter_mod, "find_oxi_toml", lambda: None)
+    monkeypatch.setattr(adapter_mod, "entry_points", lambda group: [ep])
+    monkeypatch.delenv("OXI_ADAPTER", raising=False)
+
+    load_adapter()
+    assert isinstance(get_active_adapter(), _MinimalAdapter)
+
+
+# ---- _resolve_path_kwargs -------------------------------------------------
+
+
+def test_resolve_path_kwargs_resolves_root_suffix(tmp_path: Path):
+    from oxi_core.adapter import _resolve_path_kwargs
+
+    result = _resolve_path_kwargs({"repo_root": "."}, tmp_path)
+    assert Path(result["repo_root"]) == tmp_path.resolve()
+
+
+def test_resolve_path_kwargs_resolves_path_suffix(tmp_path: Path):
+    from oxi_core.adapter import _resolve_path_kwargs
+
+    result = _resolve_path_kwargs({"db_path": "subdir/oxi.db"}, tmp_path)
+    assert Path(result["db_path"]) == (tmp_path / "subdir" / "oxi.db").resolve()
+
+
+def test_resolve_path_kwargs_resolves_dir_suffix(tmp_path: Path):
+    from oxi_core.adapter import _resolve_path_kwargs
+
+    result = _resolve_path_kwargs({"worktree_dir": "wt"}, tmp_path)
+    assert Path(result["worktree_dir"]) == (tmp_path / "wt").resolve()
+
+
+def test_resolve_path_kwargs_leaves_other_keys_unchanged(tmp_path: Path):
+    from oxi_core.adapter import _resolve_path_kwargs
+
+    result = _resolve_path_kwargs({"label": "hello", "count": 3}, tmp_path)
+    assert result["label"] == "hello"
+    assert result["count"] == 3
+
+
+def test_resolve_path_kwargs_leaves_non_string_path_key_unchanged(tmp_path: Path):
+    """A kwarg ending in _root whose value is not a string passes through."""
+    from oxi_core.adapter import _resolve_path_kwargs
+
+    result = _resolve_path_kwargs({"repo_root": None}, tmp_path)
+    assert result["repo_root"] is None
