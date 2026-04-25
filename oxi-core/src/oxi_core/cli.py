@@ -614,13 +614,31 @@ def cmd_init(args: argparse.Namespace) -> int:
     """Scaffold a new adapter. Does NOT require an active adapter."""
     from .wizard import run as wizard_run
 
-    # If the operator didn't provide a destination, ask the wizard for
-    # answers first so we can use the slug in the default directory.
+    # If the operator didn't provide a destination, derive it from the
+    # adapter slug they're about to type.  Two-pass flow: collect first
+    # so we know the slug, then hand both to wizard_run which renders
+    # the review screen and writes.
+    yes = bool(getattr(args, "yes", False))
     if args.destination is None:
-        from .wizard import collect_answers, default_template_root, scaffold
+        from .wizard import collect_answers
 
         answers = collect_answers()
         dest = Path.cwd() / f"oxi-adapter-{answers.adapter_slug}"
+        # Re-enter the wizard at the scaffold step using the answers
+        # we already collected.  We can't pass them through cleanly
+        # because run() owns the prompt loop — instead, call scaffold
+        # directly and skip the review screen if --yes; otherwise show
+        # the review and require confirmation here.
+        from .wizard import _prompt_bool, _render_review, default_template_root, scaffold
+
+        print(_render_review(answers, dest))
+        if not yes:
+            confirmed = _prompt_bool(
+                "Proceed and write these files?", default=True,
+            )
+            if not confirmed:
+                print("oxi init: aborted — no files written.")
+                return 0
         scaffold(
             answers, dest,
             template_root=default_template_root(),
@@ -635,8 +653,9 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("  3. oxi status   # confirms the adapter loads")
         return 0
 
-    wizard_run(args.destination, force=args.force)
-    return 0
+    result = wizard_run(args.destination, force=args.force, yes=yes)
+    # wizard_run returns None if the operator declined the review.
+    return 0 if result is not None else 0
 
 
 def cmd_dashboard(args: argparse.Namespace) -> int:
@@ -687,6 +706,10 @@ def _build_parser() -> argparse.ArgumentParser:
     p_init.add_argument(
         "--force", action="store_true",
         help="overwrite existing files in destination",
+    )
+    p_init.add_argument(
+        "--yes", "-y", action="store_true",
+        help="skip the review-and-confirm prompt (non-interactive scaffolding)",
     )
     p_init.set_defaults(func=cmd_init)
 

@@ -101,6 +101,12 @@ def _valid_positive_int(value: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
+# Total number of logical steps in the wizard.  The 8-step framing is
+# what's documented in the SKILL.md; we group the budget and dispatch
+# sections each as one step so the operator's mental model matches.
+TOTAL_STEPS = 8
+
+
 def _prompt(
     question: str,
     *,
@@ -108,11 +114,22 @@ def _prompt(
     validator=lambda v: True,
     error: str = "invalid value",
     input_fn=input,
+    step: int | None = None,
 ) -> str:
-    """Ask `question`; accept default on empty; loop until valid."""
+    """Ask `question`; accept default on empty; loop until valid.
+
+    When *step* is provided, prefix the question with ``[N/8]`` so the
+    operator can see where they are in the flow.  Sub-prompts inside a
+    grouped step (budget, dispatch) pass ``step=None`` to inherit the
+    parent step's banner.
+    """
+    if step is not None:
+        prefix = f"[{step}/{TOTAL_STEPS}] "
+    else:
+        prefix = ""
     suffix = f" [{default}]" if default is not None else ""
     while True:
-        answer = input_fn(f"{question}{suffix}: ").strip()
+        answer = input_fn(f"{prefix}{question}{suffix}: ").strip()
         if not answer and default is not None:
             answer = default
         if validator(answer):
@@ -175,6 +192,7 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         validator=_valid_project_name,
         error="non-empty string required",
         input_fn=input_fn,
+        step=1,
     )
 
     # Default adapter slug derived from project name.
@@ -185,6 +203,7 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         validator=_valid_adapter_slug,
         error="lowercase letters, digits, hyphens; no leading/trailing hyphen",
         input_fn=input_fn,
+        step=2,
     )
     package_suffix = adapter_slug.replace("-", "_")
 
@@ -193,6 +212,7 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         validator=_valid_github_repo,
         error="must match owner/name",
         input_fn=input_fn,
+        step=3,
     )
 
     repo_root = _prompt(
@@ -201,6 +221,7 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         validator=_valid_abs_path,
         error="must be an absolute path",
         input_fn=input_fn,
+        step=4,
     )
 
     roadmap_location = _prompt(
@@ -209,6 +230,7 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         validator=lambda v: bool(v.strip()) and not v.startswith("/"),
         error="relative path required (e.g. roadmap.md or docs/roadmap.md)",
         input_fn=input_fn,
+        step=5,
     )
 
     plan_tier = _prompt(
@@ -217,9 +239,12 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         validator=_valid_plan_tier,
         error="non-empty string required",
         input_fn=input_fn,
+        step=6,
     )
 
-    print("\nBudget caps (USD):")
+    # Step 7 — budget block.  Sub-prompts inherit the [7/8] banner via
+    # the section header below; individual sub-prompts pass step=None.
+    print(f"\n[7/{TOTAL_STEPS}] Budget caps (USD):")
     budget_soft_warn = float(_prompt(
         "  daily soft warn",
         default=f"{rec.daily_soft_warn_usd}",
@@ -245,7 +270,8 @@ def collect_answers(input_fn=input) -> WizardAnswers:
         input_fn=input_fn,
     ))
 
-    print("\nDispatch:")
+    # Step 8 — dispatch policy.
+    print(f"\n[8/{TOTAL_STEPS}] Dispatch:")
     max_concurrent = int(_prompt(
         "  max concurrent dispatches",
         default=f"{rec.max_concurrent}",
@@ -393,22 +419,76 @@ def default_template_root() -> Path:
     )
 
 
+def _render_review(answers: WizardAnswers, destination: Path) -> str:
+    """Format the review-and-confirm screen as a single string.
+
+    Operators get to see the captured values + the destination path
+    before any disk write.  Pure formatting — no I/O — so tests can
+    snapshot the body without hitting disk.
+    """
+    lines = [
+        "",
+        "─── review and confirm ──────────────────────────────",
+        "",
+        "About to write a new adapter package with these values:",
+        "",
+        f"  project name      : {answers.project_name}",
+        f"  adapter slug      : {answers.adapter_slug}",
+        f"  package           : oxi-adapter-{answers.adapter_slug}",
+        f"  GitHub repo       : {answers.github_repo}",
+        f"  repo root         : {answers.repo_root}",
+        f"  roadmap location  : {answers.roadmap_location}",
+        f"  plan tier         : {answers.plan_tier}",
+        "  budget caps (USD) :",
+        f"      soft warn       {answers.budget_soft_warn}",
+        f"      hard cap        {answers.budget_hard_cap}",
+        f"      per-task Opus   {answers.budget_per_task_opus}",
+        f"      per-task Sonnet {answers.budget_per_task_sonnet}",
+        f"  max concurrent    : {answers.max_concurrent}",
+        f"  auto-merge        : {answers.auto_merge}",
+        "",
+        f"Destination: {destination}",
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def run(
     destination: Path,
     *,
     template_root: Path | None = None,
     force: bool = False,
     input_fn=input,
-) -> WizardAnswers:
-    """Full flow: prompt → scaffold → print next steps.
+    yes: bool = False,
+) -> WizardAnswers | None:
+    """Full flow: prompt → review → scaffold → print next steps.
 
-    Returns the ``WizardAnswers`` so callers (tests) can assert on
-    what was collected.
+    Returns the ``WizardAnswers`` on success, or ``None`` if the
+    operator declined the confirmation prompt (no files written).
+
+    ``yes=True`` skips the review prompt — useful for non-interactive
+    scaffolding from CI or scripts.  The ``force`` flag is a separate
+    knob (overwrite an existing destination); the two are independent.
     """
     if template_root is None:
         template_root = default_template_root()
 
     answers = collect_answers(input_fn=input_fn)
+
+    # Review screen — show every captured value + the destination path
+    # before any disk write.  Operators can Ctrl-C / decline if they
+    # see a typo, sparing the rerun-with-`--force` cycle.
+    print(_render_review(answers, destination))
+    if not yes:
+        confirmed = _prompt_bool(
+            "Proceed and write these files?",
+            default=True,
+            input_fn=input_fn,
+        )
+        if not confirmed:
+            print("oxi init: aborted — no files written.")
+            return None
+
     written = scaffold(
         answers, destination,
         template_root=template_root, force=force,

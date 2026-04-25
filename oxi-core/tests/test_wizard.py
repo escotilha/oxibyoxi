@@ -345,12 +345,14 @@ def test_run_end_to_end(tmp_path: Path, capsys):
         "", "", "", "",
         "",
         "",
+        "",  # accept the [Y/n] review-and-confirm prompt (default True).
     ]
     dest = tmp_path / "adapter-out"
     answers = run(
         dest,
         input_fn=_scripted_input(inputs),
     )
+    assert answers is not None
     assert answers.project_name == "demo"
     assert (dest / "src" / "oxi_adapter_demo" / "adapter.py").exists()
 
@@ -358,6 +360,120 @@ def test_run_end_to_end(tmp_path: Path, capsys):
     captured = capsys.readouterr()
     assert "Next steps" in captured.out
     assert "pip install -e ." in captured.out
+    # Step counter should appear at least once (e.g. "[1/8]") in the
+    # captured output — it's printed via input_fn's prompt argument
+    # which capsys also captures from stdout when input() is called.
+    # We don't strictly assert it here because the scripted input_fn
+    # discards the prompt; see test_step_counter_in_prompt for the
+    # dedicated check.
+
+
+def test_run_aborts_when_review_declined(tmp_path: Path, capsys):
+    """Operator can decline the review screen — no files are written."""
+    inputs = [
+        "demo",
+        "",
+        "owner/demo",
+        str(tmp_path / "repo"),
+        "",
+        "",
+        "", "", "", "",
+        "",
+        "",
+        "n",  # decline the review-and-confirm.
+    ]
+    dest = tmp_path / "adapter-out"
+    result = run(
+        dest,
+        input_fn=_scripted_input(inputs),
+    )
+    assert result is None
+    # No adapter package on disk.
+    assert not (dest / "src").exists()
+    # Abort message in stdout.
+    captured = capsys.readouterr()
+    assert "aborted" in captured.out.lower()
+
+
+def test_run_yes_flag_skips_review(tmp_path: Path):
+    """``yes=True`` writes immediately — no extra input consumed."""
+    inputs = [
+        "demo",
+        "",
+        "owner/demo",
+        str(tmp_path / "repo"),
+        "",
+        "",
+        "", "", "", "",
+        "",
+        "",
+        # No 13th input — yes=True should skip the prompt entirely.
+    ]
+    dest = tmp_path / "adapter-out"
+    answers = run(
+        dest,
+        input_fn=_scripted_input(inputs),
+        yes=True,
+    )
+    assert answers is not None
+    assert (dest / "src" / "oxi_adapter_demo" / "adapter.py").exists()
+
+
+def test_step_counter_in_prompt():
+    """``[N/8]`` prefix appears on prompts when step is set."""
+    from oxi_core.wizard import _prompt
+
+    captured: list[str] = []
+
+    def fake_input(prompt: str) -> str:
+        captured.append(prompt)
+        return "value"
+
+    _prompt(
+        "Project name?",
+        validator=lambda v: True,
+        input_fn=fake_input,
+        step=1,
+    )
+    _prompt(
+        "Sub-prompt",
+        validator=lambda v: True,
+        input_fn=fake_input,
+        # No step — should not get a [N/8] prefix.
+    )
+    assert captured[0].startswith("[1/8]")
+    assert "Project name?" in captured[0]
+    assert not captured[1].startswith("[")
+
+
+def test_render_review_includes_all_values(tmp_path: Path):
+    """The review pane shows every field the operator entered."""
+    from oxi_core.wizard import WizardAnswers, _render_review
+
+    answers = WizardAnswers(
+        project_name="demo",
+        adapter_slug="demo",
+        package_suffix="demo",
+        github_repo="owner/demo",
+        repo_root=str(tmp_path / "repo"),
+        roadmap_location="roadmap.md",
+        plan_tier="standard",
+        budget_soft_warn=5.0,
+        budget_hard_cap=20.0,
+        budget_per_task_opus=2.0,
+        budget_per_task_sonnet=0.5,
+        max_concurrent=3,
+        auto_merge=False,
+    )
+    body = _render_review(answers, tmp_path / "out")
+    assert "review and confirm" in body
+    assert "demo" in body
+    assert "owner/demo" in body
+    assert "standard" in body
+    assert "20.0" in body  # hard cap
+    assert "max concurrent" in body
+    assert "auto-merge" in body
+    assert str(tmp_path / "out") in body
 
 
 # ---------------------------------------------------------------------------
