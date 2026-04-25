@@ -109,6 +109,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         # Human-readable output.
         from .v3 import kill as kill_mod
+        from .v3._glyphs import FAIL, PAUSED
 
         ks_active = kill_mod.is_set()
         ks_path = kill_mod.path()
@@ -120,7 +121,9 @@ def cmd_status(args: argparse.Namespace) -> int:
         if ks_active:
             ks_reason = ks_path.read_text().strip()
             reason_suffix = f" — {ks_reason}" if ks_reason else ""
-            print(f"  killswitch: ⚠ ACTIVE{reason_suffix}")
+            # Killswitched engine → PAUSED glyph from the standard
+            # vocabulary (matches dashboard + brief).
+            print(f"  killswitch: {PAUSED} ACTIVE{reason_suffix}")
             print(f"              {ks_path}")
         else:
             print("  killswitch: off")
@@ -131,18 +134,20 @@ def cmd_status(args: argparse.Namespace) -> int:
         from .v3.engine_health import is_engine_unhealthy_from_db
         if is_engine_unhealthy_from_db(conn):
             print(
-                "✗ ENGINE UNHEALTHY — dispatch paused after consecutive failures. "
-                "Run `oxi v3 heal` to resume."
+                f"{FAIL} ENGINE UNHEALTHY — dispatch paused after "
+                "consecutive failures. Run `oxi v3 heal` to resume."
             )
             print()
 
         # Budget first — operators need to see hard-stop before anything else.
+        # WARN keeps ⚠ (a warning marker, distinct from task-state glyphs);
+        # HARD_STOP uses the FAIL glyph from the standard vocabulary.
         from .v3 import budget as budget_mod
         status = budget_mod.check(conn)
         marker = {
             budget_mod.Verdict.OK: "  ",
             budget_mod.Verdict.WARN: "⚠ ",
-            budget_mod.Verdict.HARD_STOP: "✗ ",
+            budget_mod.Verdict.HARD_STOP: f"{FAIL} ",
         }[status.verdict]
         print(
             f"{marker}budget (today): "

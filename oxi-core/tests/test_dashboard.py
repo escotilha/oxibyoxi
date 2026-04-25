@@ -465,3 +465,34 @@ def test_server_ignores_querystring_on_root(tmp_path: Path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ---------------------------------------------------------------------------
+# Status glyph integration — T1-21
+# ---------------------------------------------------------------------------
+
+
+def test_render_html_status_column_shows_glyph(conn):
+    """Task table status column gets the glyph + the status word."""
+    _seed(conn, "T0-1", "merged")
+    _seed(conn, "T0-2", "planned")
+    _seed(conn, "T0-3", "failed")
+    html_str = render_html(conn)
+    # Status text still present (existing tests rely on this).
+    assert "merged" in html_str
+    assert "planned" in html_str
+    assert "failed" in html_str
+    # Glyphs are now alongside the words.
+    assert "✓ merged" in html_str
+    assert "○ planned" in html_str
+    assert "✗ failed" in html_str
+
+
+def test_render_html_status_histogram_shows_glyph(conn):
+    """The 'Status (last Nh)' table also gets glyphs."""
+    _seed(conn, "T0-1", "merged")
+    _seed(conn, "T0-2", "merged")
+    _seed(conn, "T0-3", "dispatched", pr_number=42)
+    html_str = render_html(conn)
+    assert "✓ merged" in html_str
+    assert "● dispatched" in html_str

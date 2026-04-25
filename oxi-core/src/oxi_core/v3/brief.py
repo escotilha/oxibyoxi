@@ -18,6 +18,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from ._glyphs import glyph_for_status
+
 
 @dataclass(frozen=True)
 class Brief:
@@ -44,7 +46,11 @@ class Brief:
             lines.append("_(no tasks)_")
         else:
             for status in sorted(self.status_counts):
-                lines.append(f"- **{status}**: {self.status_counts[status]}")
+                glyph = glyph_for_status(status)
+                prefix = f"{glyph} " if glyph else ""
+                lines.append(
+                    f"- {prefix}**{status}**: {self.status_counts[status]}"
+                )
         lines += [
             "",
             f"## Spend (window): ${self.total_cost_usd:.2f}",

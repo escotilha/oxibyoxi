@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..adapter import get_active_adapter
+from ._glyphs import glyph_for_status
 from .brief import generate as generate_brief
 from .engine_health import HEALTH_BANNER, is_engine_unhealthy_from_db
 
@@ -157,7 +158,10 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
 
     brief = generate_brief(conn, window_hours=window_hours)
     status_rows = "".join(
-        f"<tr><td>{html.escape(s)}</td><td>{n}</td></tr>"
+        # Glyph + status text in the histogram.  The glyph is purely
+        # visual; the status string is preserved unchanged so existing
+        # substring assertions (e.g. "merged" in html) keep passing.
+        f"<tr><td>{glyph_for_status(s)} {html.escape(s)}</td><td>{n}</td></tr>"
         for s, n in sorted(brief.status_counts.items())
     ) or "<tr><td colspan=2><em>no tasks</em></td></tr>"
 
@@ -181,12 +185,16 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
         )
         events = _task_last_events(conn, task_id)
         events_widget = _render_task_events(events)
+        # Status glyph: ``dispatched`` covers both 'worker still running'
+        # and 'PR awaiting review'.  Prefer ✓-style cues only on terminal
+        # states; running uses ●, queued uses ○.
+        status_glyph = glyph_for_status(status)
         task_rows_parts.append(
             "<tr>"
             f"<td><code>{html.escape(ident)}</code>{retry_badge}"
             f"{events_widget}</td>"
             f"<td>{html.escape(title)}</td>"
-            f"<td>{html.escape(status)}</td>"
+            f"<td>{status_glyph} {html.escape(status)}</td>"
             # pr is INTEGER in schema but forks may relax it; escape defensively.
             f"<td>{html.escape(str(pr)) if pr is not None else ''}</td>"
             f"<td>{html.escape(last_progress or '')}</td>"
