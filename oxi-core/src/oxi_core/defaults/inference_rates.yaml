@@ -1,0 +1,86 @@
+# inference_rates.yaml — model cost rate-card for InferenceGateway usage.
+#
+# Schema
+# ------
+# Each top-level key is a model identifier as understood by the LiteLLM
+# proxy (and echoed in the ``model`` field of InferenceResult).
+#
+# Fields per model (all USD per million tokens):
+#
+#   input_usd_per_mtok  (float)
+#       Cost per 1 000 000 prompt/input tokens.
+#
+#   output_usd_per_mtok (float)
+#       Cost per 1 000 000 completion/output tokens.
+#
+#   provider  (str)
+#       Logical provider name; matches the top-level key in inference.yaml.
+#
+#   notes  (str, optional)
+#       Free-text note for operators (context window, capabilities, etc.).
+#
+# Usage
+# -----
+# These rates are used for local cost estimation when the LiteLLM proxy
+# does not return a cost header (x-litellm-response-cost absent or zero).
+# The gateway header is always preferred; this table is the fallback.
+#
+# Sources (as of 2026-04): https://docs.x.ai/docs/models  (xAI)
+#                          https://www.anthropic.com/pricing (Anthropic)
+#
+# Anthropic models (reference baselines)
+# ----------------------------------------
+
+claude-opus-4-7:
+  provider: anthropic
+  input_usd_per_mtok: 15.0
+  output_usd_per_mtok: 75.0
+  notes: >
+    Highest-capability Claude model. oxi default for 'worker' role on
+    max-tier plans.
+
+claude-sonnet-4-6:
+  provider: anthropic
+  input_usd_per_mtok: 3.0
+  output_usd_per_mtok: 15.0
+  notes: >
+    Balanced capability/cost. oxi default for 'critic' role and
+    'worker' on standard plans.
+
+claude-haiku-4-5-20251001:
+  provider: anthropic
+  input_usd_per_mtok: 0.8
+  output_usd_per_mtok: 4.0
+  notes: >
+    Fastest, cheapest Claude. oxi default for 'heartbeat-triage' and
+    'prompt-injection-screen' roles.
+
+# xAI Grok models (T2-41)
+# -------------------------
+
+xai/grok-2:
+  provider: xai
+  input_usd_per_mtok: 2.0
+  output_usd_per_mtok: 10.0
+  notes: >
+    xAI Grok 2 — strong reasoning, 128 k context.  Suitable for
+    'critic' and 'worker' roles as a cost-efficient alternative to
+    Claude Sonnet.  Reached via LiteLLM non-streaming path (T2-37).
+
+xai/grok-4-fast:
+  provider: xai
+  input_usd_per_mtok: 5.0
+  output_usd_per_mtok: 15.0
+  notes: >
+    xAI Grok 4 Fast — higher-capability Grok variant.  Suitable as
+    a worker-tier model on max plans.  Equivalent capability tier to
+    Claude Sonnet; priced slightly above Grok 2.
+
+xai/grok-code-fast-1:
+  provider: xai
+  input_usd_per_mtok: 1.0
+  output_usd_per_mtok: 5.0
+  notes: >
+    xAI Grok Code Fast 1 — code-specialised, low-latency.  Excellent
+    candidate for 'heartbeat-triage', 'classifier', and 'summary'
+    roles where speed matters more than depth.  Very cost-efficient.

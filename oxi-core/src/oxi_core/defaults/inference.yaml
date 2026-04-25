@@ -1,0 +1,64 @@
+# inference.yaml — provider configuration for InferenceGateway targets.
+#
+# Schema
+# ------
+# Each top-level key is a *provider* name (e.g. "anthropic", "xai").
+# Providers are referenced by adapter_name in routing.yaml when the
+# adapter_name maps to a non-agentic InferenceGateway path.
+#
+# Fields per provider:
+#
+#   base_url  (str)  — root URL of the LiteLLM-compatible proxy endpoint.
+#                      No trailing slash.  Operators override this at
+#                      runtime via the adapter or environment.
+#
+#   litellm_provider  (str)
+#                    — LiteLLM provider prefix, e.g. "xai".  Combined with
+#                      model_id to form the LiteLLM model string:
+#                      "<litellm_provider>/<model_id>".  Optional: when
+#                      absent the model_id is forwarded verbatim.
+#
+#   virtual_key_env  (str, optional)
+#                    — Name of the environment variable that holds the
+#                      operator's virtual API key for this provider on the
+#                      LiteLLM gateway.  Absent means the gateway accepts
+#                      unauthenticated (or internally-keyed) requests.
+#
+# Notes
+# -----
+# - This file is informational/documentary for operators who provision
+#   LiteLLM gateway targets.  oxi-core itself reads routing.yaml for
+#   model selection; the gateway base_url and api_key are supplied by
+#   the adapter at runtime.
+# - The xai block documents the upstream endpoint that the LiteLLM
+#   proxy must be configured to forward "xai/*" model strings to.
+#   See LiteLLM docs: https://docs.litellm.ai/docs/providers/xai
+
+anthropic:
+  base_url: https://api.anthropic.com
+  litellm_provider: anthropic
+  virtual_key_env: LITELLM_VIRTUAL_KEY_ANTHROPIC
+
+xai:
+  # xAI Grok models are reached through LiteLLM's xai provider.
+  # The LiteLLM gateway must be provisioned with an XAI_API_KEY
+  # environment variable pointing at the operator's xAI API key.
+  #
+  # Provisioning steps:
+  #   1. Obtain an API key at https://console.x.ai/
+  #   2. Set XAI_API_KEY=<your-key> in the LiteLLM proxy environment.
+  #   3. Add a model entry in the LiteLLM config.yaml:
+  #        - model_name: xai/grok-2
+  #          litellm_params:
+  #            model: xai/grok-2
+  #            api_base: https://api.x.ai/v1
+  #            api_key: os.environ/XAI_API_KEY
+  #      (repeat for each Grok model you want to expose)
+  #   4. Set the virtual key env var below so oxi can authenticate:
+  #        LITELLM_VIRTUAL_KEY_XAI=sk-<your-litellm-virtual-key>
+  #   5. Flip heartbeat-triage (or other roles) in routing.yaml to
+  #      adapter_name: xai and the desired grok model_id — no redeploy
+  #      of oxi-core needed.
+  base_url: https://api.x.ai/v1
+  litellm_provider: xai
+  virtual_key_env: LITELLM_VIRTUAL_KEY_XAI

@@ -7,12 +7,16 @@
 #
 # Fields per role (all required unless marked optional):
 #
-#   adapter_name  (str)  — logical adapter identifier, e.g. "anthropic".
-#                          Passed through to the dispatch layer; not
-#                          validated against installed adapters here.
+#   adapter_name  (str)  — logical adapter identifier, e.g. "anthropic"
+#                          or "xai".  Passed through to the dispatch
+#                          layer; not validated against installed adapters
+#                          here.  For InferenceGateway (non-agentic) roles
+#                          the adapter_name maps to a provider block in
+#                          defaults/inference.yaml.
 #
 #   model_id      (str)  — canonical model string forwarded to the
-#                          adapter, e.g. "claude-opus-4-7".
+#                          adapter / LiteLLM proxy.  For xAI models use
+#                          the LiteLLM prefix form: "xai/<model>".
 #
 #   fallback_chain (list[str], optional)
 #                       — ordered list of model_ids to try when the
@@ -28,6 +32,16 @@
 # 3. No code changes required — route_for() reads this file at startup
 #    and caches the table for the lifetime of the process.
 #
+# Swapping a role to Grok (T2-41)
+# --------------------------------
+# xAI Grok models are available via the InferenceGateway (non-streaming,
+# cost-header path — T2-37).  To redirect a role, comment out the
+# current stanza and uncomment the matching "# Grok recipe" block below.
+# No code redeploy is needed — the engine re-reads this file at startup.
+#
+# Pre-requisite: provision your LiteLLM gateway with the xAI provider
+# and a virtual key.  See defaults/inference.yaml for full instructions.
+#
 # Env-var overrides are NOT supported here (deferred to T2-40).
 # Fork operators who need different routing should provide their own
 # routing.yaml via the adapter's data-files extension point (TBD).
@@ -39,18 +53,56 @@ worker:
     - claude-sonnet-4-6
     - claude-haiku-4-5-20251001
 
+# Grok recipe — worker (uncomment to route to Grok 4 Fast)
+# worker:
+#   adapter_name: xai
+#   model_id: xai/grok-4-fast
+#   fallback_chain:
+#     - xai/grok-2
+
 critic:
   adapter_name: anthropic
   model_id: claude-sonnet-4-6
   fallback_chain:
     - claude-haiku-4-5-20251001
 
+# Grok recipe — critic (uncomment to route to Grok 2)
+# critic:
+#   adapter_name: xai
+#   model_id: xai/grok-2
+#   fallback_chain:
+#     - xai/grok-code-fast-1
+
 heartbeat-triage:
   adapter_name: anthropic
   model_id: claude-haiku-4-5-20251001
   fallback_chain: []
 
+# Grok recipe — heartbeat-triage (uncomment to route to Grok Code Fast)
+# heartbeat-triage:
+#   adapter_name: xai
+#   model_id: xai/grok-code-fast-1
+#   fallback_chain: []
+
 prompt-injection-screen:
   adapter_name: anthropic
   model_id: claude-haiku-4-5-20251001
   fallback_chain: []
+
+# Grok recipe — prompt-injection-screen (uncomment to route to Grok Code Fast)
+# prompt-injection-screen:
+#   adapter_name: xai
+#   model_id: xai/grok-code-fast-1
+#   fallback_chain: []
+
+# Grok recipe — summary (add this role to enable Grok-based summarisation)
+# summary:
+#   adapter_name: xai
+#   model_id: xai/grok-code-fast-1
+#   fallback_chain: []
+
+# Grok recipe — classifier (add this role to enable Grok-based classification)
+# classifier:
+#   adapter_name: xai
+#   model_id: xai/grok-code-fast-1
+#   fallback_chain: []
