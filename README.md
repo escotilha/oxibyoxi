@@ -70,7 +70,7 @@ oxi v3 tick --real-claude       # spends budget, ships PRs
 
 The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks/install.md). Full operator manual at [`docs/manual/`](docs/manual/).
 
-**Status:** beta (`0.1.0b1` on PyPI). The engine built most of itself today via dogfood — 59 PRs merged, $20.15 of dispatch spend, every safety rail proven in production. See [release notes](docs/release-notes/v0.1.0b1.md) for what's in this cut.
+**Status:** beta (`0.1.0b1` on PyPI). The engine has been dogfooding itself for two days — 100+ PRs merged across the build, every safety rail proven in production, parallel dispatch + auto-merge live, daily-cap raised to $100 once the engine showed it could spend it productively. See [release notes](docs/release-notes/v0.1.0b1.md) for what's in this cut.
 
 ## How it works
 
@@ -171,7 +171,7 @@ See [`docs/roadmap.md`](docs/roadmap.md) for current items. Phase 1 (engine), Ph
 
 ## Status
 
-**Beta** (`0.1.0b1`). The engine has dogfooded itself end-to-end — 59 PRs merged in one day with the engine writing ~40 of them, $20.15 of dispatch spend that hit the daily-hard-cap rail exactly as designed, full first-fork install path verified against PyPI from a fresh venv. 940+ tests pass against a fake-claude + fake-GitHub harness.
+**Beta** (`0.1.0b1`). The engine has dogfooded itself end-to-end — 100+ PRs merged across two consecutive days with the engine writing most of them, parallel dispatch active (3-5 concurrent workers, RAM-probed), auto-merge enabled for engine-originated PRs, daily-cap raised to $100 once the rails were proven, full first-fork install path verified against PyPI from a fresh venv. 940+ tests pass against a fake-claude + fake-GitHub harness.
 
 The 0.1.0b* line commits to no breaking changes within minor. 0.2.0+ may break the adapter protocol; check release notes.
 
