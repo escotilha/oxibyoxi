@@ -35,6 +35,78 @@ _PR [#103](https://github.com/escotilha/oxi/pull/103) — lychee for broken-link
 
 ---
 
+## Tier 2 — multi-model orchestration (#127)
+
+**T2-30 · agentic adapter protocol + ClaudeCodeAdapter shim**
+_introduce `oxi_core/v3/agentic/__init__.py` defining the `AgenticAdapter` Protocol over the existing `dispatch_invoke.invoke()` contract; ship `ClaudeCodeAdapter` as a pure passthrough. `dispatch_invoke.py` keeps its public surface and is re-exported through `agentic/claude.py` so call sites (`dispatch.py`, `critic.py`, `tail_dispatch.py`, `cli.py`) change zero lines. Adds the `model_id`, `usage_normalizer` and `tool_translator` hooks the future `CodexCliAdapter` will need, but `ClaudeCodeAdapter` implements them as identity functions for now. New file `tests/test_agentic_contract.py` defines the round-trip contract test that every future adapter must pass against a recorded `DispatchResult` fixture._
+
+**T2-31 · codex adapter skeleton + version pin smoke test**
+_create `oxi_core/v3/agentic/codex.py` with a `CodexCliAdapter` class implementing `AgenticAdapter`. The skeleton spawns `codex exec --json` via `asyncio.create_subprocess_exec` (argv-form, never `shell=True`), drains stdout/stderr concurrently with the same 1MB StreamReader limit pattern from `dispatch_invoke.py`, and applies the same env whitelist + process-group isolation. On adapter init, emit a known-good 3-event JSONL fixture through the parser to verify the binary's output format matches; raise `CodexFormatDriftError` with the binary version on mismatch. The codex binary version is read from a new adapter method (returns the operator-pinned semver). No DispatchResult yet — this PR is the spawn shell only._
+
+**T2-32 · codex JSONL event parser + event-type mapping**
+_add `oxi_core/v3/agentic/codex_events.py`. Parses the codex `--json` event stream and maps codex event types (`turn.started`, `turn.completed`, `item.completed`, `tool.call.started`, `tool.call.completed`, `error`) to the canonical event types `dispatch_invoke.py` emits (`system`, `assistant`, `tool_use`, `tool_result`, `result`). Pure functions over dicts; no I/O, no subprocess. Round-trip property: replaying a normalized event sequence into `DispatchResult.result_event()` returns a non-None dict for every successful codex run. Exhaustively tested with recorded codex JSONL fixtures (committed under `tests/fixtures/codex/`)._
+
+**T2-33 · codex session-file fallback for reasoning tokens**
+_codex `--json` `usage` does not include reasoning tokens; they only appear in `~/.codex/sessions/<id>.json` written after `turn.completed`. Add `oxi_core/v3/agentic/codex_session_file.py` with `read_reasoning_tokens(session_id, sessions_dir) -> int | None`. The function polls (50ms × 20 attempts = 1s budget) for the file to exist after `turn.completed` lands; returns None on timeout (logged as a budget-undercount risk event in the ledger, never silent). The session-file path is configurable via adapter for non-default codex installs. Tests use a temp directory and write fixture session files synchronously; no real codex._
+
+**T2-34 · codex cost calculation + DispatchResult normalizer**
+_compose T2-32 + T2-33 into the adapter. `CodexCliAdapter.invoke()` builds the `DispatchResult`: `cost_usd` is computed from token counts × model rate-card (rate card lives in `oxi_core/defaults/codex_rates.yaml`, separate file so it can be updated without code changes); reasoning tokens are merged in from the session file before cost is computed. Classification mapping: codex exit 0 → SUCCESS; exit 130 (SIGINT) → RETRYABLE_TRANSIENT; rate-limit signal in the event stream → RETRYABLE_TRANSIENT with `rate_limit_exhausted=True`; everything else → FAILED. Wall-clock timeout enforcement uses the same `asyncio.wait_for` + `_kill_process_group` pattern as `dispatch_invoke.py`._
+
+**T2-35 · codex shadow-run harness + agreement metric**
+_new `oxi_core/v3/agentic/shadow.py`. When the operator sets `OXI_AGENTIC_SHADOW=codex`, every `ClaudeCodeAdapter.invoke()` call also dispatches to `CodexCliAdapter` against a copy of the same prompt, in a sibling worktree. Both `DispatchResult`s are persisted to the ledger as paired `agentic_shadow_observed` events with a `shape_match: bool` and a `cost_delta_usd: float`. **No behavior change** — the shadow result is observed only. Dashboard surfaces an "agentic shadow" panel with the last 50 paired runs, agreement rate, and cost delta. After 14 days of shadow data, operator decides whether T2-39 (promote a task class) is safe._
+
+**T2-36 · attach to mac mini litellm gateway + key provisioning runbook**
+_oxi connects to the LiteLLM gateway already running on the operator's Mac Mini (per the local-inference skill setup) instead of standing up its own proxy. This PR adds: (a) `defaults/inference.yaml` declaring the gateway URL (Tailscale-discovered) and the per-role virtual-key names (`oxi-heartbeat`, `oxi-classifier`, `oxi-summary`); (b) a runbook `docs/runbooks/litellm-gateway.md` walking the operator through provisioning a virtual key on the existing gateway, scoping its budget, and rotating it; (c) an adapter method `Adapter.inference_gateway_url()` returning the URL + key-name map; (d) a CI smoke check that hits the configured URL's `/health` (skipped when `OXI_INFERENCE_OFFLINE=1`). Coupling risk: oxi's heartbeat path now depends on the Mac Mini gateway being reachable — if it's down, T2-38's triage step disables itself and `heartbeat.py` falls back to today's no-LLM behavior. Documented in the runbook. Net new ~30 LOC + runbook._
+
+**T2-37 · inference gateway client + non-streaming cost-header lock**
+_create `oxi_core/v3/inference/__init__.py` defining `InferenceGateway` with one method: `async complete(messages, model, max_tokens, **kwargs) -> InferenceResult`. `InferenceResult` carries `text`, `cost_usd` (from the `x-litellm-response-cost` response header), `tokens_in`, `tokens_out`, `model`, `latency_ms`. Implementation uses `httpx.AsyncClient` against the LiteLLM proxy URL (configured via adapter). **Hard-coded `stream=False` in the request body** with a unit test that monkeypatches the httpx client and asserts every outbound request body has `stream=False`. A `FakeInferenceGateway` for tests returns canned responses by `(model, prompt_hash)` tuple. No call sites changed in this PR._
+
+**T2-38 · migrate heartbeat reasoning to inference gateway**
+_`heartbeat.py` currently has zero LLM calls — but the design calls for a future "stuck task triage" reasoning step that summarizes why a task is stuck before transitioning to `abandoned`. This PR adds that step using `InferenceGateway` (model: routing.yaml-driven, default `claude-haiku-4-5`). The triage summary is recorded on the `abandoned_by_heartbeat` ledger event in a new `triage_summary` field. Behind a feature flag in the adapter (`heartbeat.triage_enabled`, default False); when disabled, `heartbeat.py` behavior is byte-identical to today. First non-agentic call site, validates the gateway works in production. Fakes-not-mocks: tests pass `FakeInferenceGateway` through the heartbeat reap call._
+
+**T2-39 · routing.py + defaults/routing.yaml**
+_new `oxi_core/v3/routing.py` with one pure function: `route_for(role: str, task: dict | None = None) -> ModelChoice`. `ModelChoice` is a frozen dataclass with `(adapter_name: str, model_id: str, fallback_chain: tuple[str, ...])`. Reads from `oxi_core/defaults/routing.yaml` — schema is documented in the YAML comment header; loaded once and cached. YAML keys are roles (`worker`, `critic`, `heartbeat-triage`, `prompt-injection-screen`); values name the adapter + model + a fallback chain. No env-var overrides yet (deferred to T2-40 if it's ever needed). Tests cover: known role → expected adapter; unknown role → `RoleNotConfiguredError`; YAML missing → clear error pointing at the file path. **No call sites changed in this PR** — wiring `dispatch.py` to consult `route_for` is the next entry._
+
+**T2-40 · promote one trivial task class to codex via routing**
+_wire `route_for("worker", task)` into `dispatch.py`'s model-selection path (today inlined as `_pick_model`). For the initial promotion: the routing.yaml entry for the `worker` role with `task.tier == 2` and `task.title contains "doc"` (matching tasks like T2-16 doc-lint, T3-1 doc ingester) returns `(adapter="codex", model="codex-mini", fallback=["claude-haiku-4-5"])`. All other tasks continue to route to `(adapter="claude", model="claude-sonnet-4-5", ...)`. `_pick_model` becomes a thin wrapper that calls `route_for` and unpacks `ModelChoice.model_id`; `dispatch.py` now reads `ModelChoice.adapter_name` and selects which `AgenticAdapter` instance to invoke. Acceptance: a doc-tier-2 task dogfood-dispatches against Codex; `auto_merge` succeeds; the brief shows `adapter=codex` for that task. Per anti-pattern #1, this PR ships only the doc-tier promotion. Subsequent task-class promotions are separate PRs._
+
+## Tier 1 — auto-improve subsystem (#128)
+
+**T1-B1 · `auto_external` skeleton + adapter Protocol method + CLI subcommand stubs**
+_create the empty package; add `Adapter.auto_improve_config()`; add `AutoExternalConfig` dataclass; stub `oxi v3 auto-improve {scan,unpause,status}` subcommands that print "not implemented" and exit 0; add the `LedgerEvent` constants from §2; extend `scripts/lint-for-leaks.sh` with the forbidden-imports gate. All fakes/fixtures land here so subsequent PRs are tiny._
+
+**T1-B2 · GitHub source fetcher**
+_implements `GitHubSource` against pinned-org release feeds (8) and topic queries (5). Star-velocity prefilter: drop repos < 5 stars/day in the last 30 days. Commit-activity prefilter: drop repos with no commits in the last 14 days. Reuses `oxi_core.v3.github_client.GitHubClient` Protocol; tests use `FakeGitHubClient` from `tests/fixtures/fake_github.py`. Per-source try/except — failure emits `AUTO_IMPROVE_SOURCE_FAILED` and other sources continue._
+
+**T1-B3 · Newsletter source fetcher**
+_implements `NewsletterSource` against AlphaSignal, Latent Space, BensBites public archives. HTML scrape via `httpx` + `selectolax` (already a dep via `pr_watcher`? — confirm). Per-source try/except. New `FakeHTTPFetcher` in `tests/fixtures/fake_http.py` returns canned HTML fixtures from `tests/fixtures/data/newsletters/`. Each newsletter gets its own parser function so a layout change to one doesn't take down all three._
+
+**T1-B4 · X source fetcher (via X skill)**
+_implements `XSource` as a subprocess wrapper around the operator's X skill (per Q1). Reads ~15-account curated list from `AutoExternalConfig.x_account_list`; calls `config.x_skill_binary` with the list and a since-timestamp; parses the skill's stdout as a list of post records. Disabled when `config.x_skill_binary is None` — returns `[]` without subprocess call (asserted in test). New `FakeXSkill` fixture writes canned stdout. If subprocess returns non-zero or stdout fails to parse → `AUTO_IMPROVE_SOURCE_FAILED` with the exit code in payload, no retry within the same scan. Acceptance: when binary is `None`, no subprocess; when binary is set, subprocess runs with the configured arg shape; parse failures emit the right ledger event._
+
+**T1-B5 · Ranking pipeline (no LLM yet)**
+_implements `prefilter`, `bm25_score`, `vector_rerank`, `rrf_combine` in `ranking.py`. SQLite FTS5 virtual table built on the fly from roadmap.md + CHANGELOG.md + last-90-day merged PRs (queried via `GitHubClient.list_merged_prs(since=now-90d)`). sqlite-vec extension loaded; embeddings via `all-MiniLM-L6-v2` sentence-transformer (already a dep — confirm in `pyproject.toml`). RRF k=60 hardcoded (matches user's memory rule for hybrid retrieval). Tests use a fixed 50-item corpus and assert deterministic top-15 ordering._
+
+**T1-B6 · LLM judge with rubric + fabricated-module hard filter**
+_implements `HaikuJudge` in `judge.py`. Reads current module list via `pkgutil.iter_modules(oxi_core.v3.__path__)`. Structured output schema: `{relevance: 1-5, concreteness: 1-5, suggested_tier: 0|1|2, duplicate: bool, fabricated_module: bool, rationale: str}`. Hard-rejects when `fabricated_module=true`, emits `EXTERNAL_PROPOSAL_REJECTED_FABRICATED`. Calls `budget.check()` before every invocation; honors internal $5/day cap (separate ledger query against today's `EXTERNAL_PROPOSAL_*` cost-tagged events). Fake judge: `FakeJudge` in `tests/fixtures/fake_judge.py` with deterministic verdicts keyed by candidate ID._
+
+**T1-B7 · Three-layer dedup**
+_implements `dedup_identifier`, `dedup_semantic`, `dedup_temporal` in `dedup.py`. Identifier dedup: query `EXTERNAL_PROPOSAL_EMITTED` events for the next monotonic counter. Semantic dedup: cosine similarity ≥ 0.85 against open `front` rows + tasks updated in last 30 days. Temporal dedup: same `(signal_kind, target_identifier)` within 14 days → skip and emit `EXTERNAL_PROPOSAL_DEDUP_SKIPPED`. Tests cover each layer with fixed embeddings + ledger fixtures._
+
+**T1-B8 · Emit step — ledger events + Markdown digest writer**
+_implements `emit_proposal` in `emit.py`. Writes one `EXTERNAL_PROPOSAL_EMITTED` event per accepted proposal, inserts a row into `front` with `task_id=NULL` and the chosen `T<tier>-A<n>` identifier (or stages it pending operator accept — match `auto_observe.accept()` shape exactly). Writes Markdown digest at `.oxi/auto-improve-digest-YYYY-MM-DD.md` with sections: Top proposals, Skipped (dedup), Skipped (fabricated), Source failures, Budget held. File path uses `adapter.paths().repo_root` — never hardcoded._
+
+**T1-B9 · `auto_improve_health` — acceptance-ratio tracker + auto-pause**
+_implements `health.py`. On every scan, computes `accepted / emitted` over the last 14 days from ledger events. If ratio < `acceptance_ratio_threshold` (default 0.15) for two consecutive 7-day windows: emit `AUTO_IMPROVE_NOISE_ALERT`, write a `paused: true` row in a new `auto_improve_state` table (or reuse `engine_state` table — confirm in implementation), and emit `AUTO_IMPROVE_PAUSED`. Manual unpause via `oxi v3 auto-improve unpause` (CLI subcommand wired in B1; the actual unpause logic lands here). Auto-pause is **per-loop** — does not affect the engine killswitch._
+
+**T1-B10 · Claude Code Routine config + entry-point script**
+_adds `scripts/auto_improve_routine.py` (the entry point Routines invokes) and `routines/auto-improve.toml` (or whatever shape the Routines schema settles on at GA). Credentials via Anthropic Managed Agent Vaults — no token in the routine config or env file. The script: opens the SQLite DB, builds `EngineState`, calls `auto_external.scan()`, exits. Idempotent: if a scan already ran today, `EXTERNAL_PROPOSAL_EMITTED` events for today exist → skip and log. Smoke test: a CI job runs the script against a fixture DB and asserts the digest file is written._
+
+**T1-B11 · GitHub Actions schedule fallback + watchdog (ships only if Routines GA slips)**
+_adds `.github/workflows/auto-improve.yml` running on cron `0 5 * * *`. Calls `scripts/auto_improve_routine.py`. Watchdog: if no `EXTERNAL_PROPOSAL_EMITTED` event in the last 36h, the next run emits a `auto_improve_watchdog_stalled` event and notifies via the existing `notification.py` backend. Don't ship this unless Routines is actually delayed past B10's merge date. Track Routines GA in `docs/origin-feature-gap-2026-04-24.md` and decide at B10 acceptance time._
+
+---
+
 ## Done (moved to release notes)
 
 The 0.1.0a* alpha series and the 0.1.0b1 cut shipped 24 of the original roadmap items:
