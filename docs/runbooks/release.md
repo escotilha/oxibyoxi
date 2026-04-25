@@ -26,10 +26,14 @@ How to cut a new oxi-core or oxi-adapter-reference release.
    - cleans `dist/` and `build/`
    - builds sdist + wheel
    - installs the wheel in a throwaway venv and imports the package (catches packaging errors)
+   - generates an SBOM (CycloneDX JSON, `*.cdx.json`) from the smoke venv
    - reads the Keychain token, invokes `twine upload`
+   - **auto-attaches the SBOM** to the matching `v<version>` GitHub Release if it exists (uses `gh release upload --clobber`)
    - prints the PyPI URL
 
 4. Verify the release on PyPI.
+
+5. **Create the GitHub Release if it does not yet exist.** The release script expects the tag `v<version>` to be pre-created (e.g., `gh release create v0.1.0b2 --title "..." --notes-file ...`). On a fresh release, the SBOM auto-attach step prints the manual command to run after creating the release.
 
 ## Dry-run on TestPyPI
 

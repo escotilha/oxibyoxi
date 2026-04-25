@@ -170,3 +170,59 @@ TWINE_USERNAME="__token__" TWINE_PASSWORD="${TOKEN}" \
 unset TOKEN
 
 echo "release: ${PKG_NAME} uploaded to ${TARGET}"
+
+# -------- attach SBOM to GitHub Release --------
+# SBOM is a release artifact, not a PyPI artifact. Auto-attach to the
+# matching GitHub Release if (a) we have an SBOM, (b) target is real
+# PyPI (not TestPyPI — those don't get GH Releases), (c) gh CLI is
+# available, and (d) a release tagged v<version> already exists.
+#
+# Skipping this step is non-fatal — operators can attach manually with
+# `gh release upload v<version> dist/*.cdx.json`.
+
+if [[ "${TARGET}" != "pypi" ]] || [[ "${GENERATE_SBOM}" != "yes" ]]; then
+  exit 0
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "release: gh CLI not installed — skipping SBOM attach to GH Release"
+  echo "        attach manually: gh release upload v<version> dist/*.cdx.json"
+  exit 0
+fi
+
+# Read version straight from the freshly built dist artifacts so we
+# match exactly what twine just uploaded — no stale pyproject reads.
+PKG_VERSION="$(
+  python -c 'import tomllib,sys; print(tomllib.loads(open("pyproject.toml","rb").read().decode()).get("project",{}).get("version",""))'
+)"
+if [[ -z "${PKG_VERSION}" ]]; then
+  echo "release: could not read version from pyproject.toml — skipping SBOM attach"
+  exit 0
+fi
+
+RELEASE_TAG="v${PKG_VERSION}"
+
+# Only attach if the tag exists. The release script does not create
+# GH Releases — that's a separate, deliberate operator step. If the
+# release isn't there yet, surface guidance and exit cleanly.
+if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+  echo "release: GH Release ${RELEASE_TAG} not found — skipping SBOM attach"
+  echo "        once you create the release, run:"
+  echo "        gh release upload ${RELEASE_TAG} ${ABS_PACKAGE_PATH}/dist/*.cdx.json"
+  exit 0
+fi
+
+# --clobber is safe here: if a previous release.sh run partially
+# uploaded an SBOM, replace it with the freshly generated one. The
+# wheel/sdist on PyPI are immutable, but a re-run can only happen on
+# the same package+version combo, which means the dependency tree —
+# and hence the SBOM — is identical.
+SBOM_FILES=("${ABS_PACKAGE_PATH}/dist/"*.cdx.json)
+if [[ ! -f "${SBOM_FILES[0]}" ]]; then
+  echo "release: no .cdx.json files in dist/ — skipping SBOM attach"
+  exit 0
+fi
+
+echo "release: attaching SBOM to GH Release ${RELEASE_TAG}"
+gh release upload "${RELEASE_TAG}" "${SBOM_FILES[@]}" --clobber
+echo "release: SBOM attached → https://github.com/escotilha/oxi/releases/tag/${RELEASE_TAG}"
