@@ -80,17 +80,17 @@ def test_roadmap_is_docs_roadmap(tmp_path: Path):
     assert SelfAdapter(repo_root=tmp_path).roadmap_location() == "docs/roadmap.md"
 
 
-def test_dispatch_host_is_local_ram_probed(tmp_path: Path):
+def test_dispatch_host_is_local_cpu_and_ram_probed(tmp_path: Path):
     hosts = SelfAdapter(repo_root=tmp_path).dispatch_hosts()
     assert len(hosts) == 1
     host = hosts[0]
     assert isinstance(host, DispatchHost)
     assert host.name == "local"
     assert host.ssh_alias is None
-    # Concurrency is probed from free RAM at call time; cap is at
-    # HARDWARE_CONCURRENCY_CEILING=20 (raised from 10 once parallel
-    # dispatch landed). Floor of 1 means even on a sandboxed/probe-
-    # failed host the engine still ticks one at a time.
+    # Concurrency is probed from free RAM *and* the 5-minute load average
+    # at call time; final value is min(ram_envelope, cpu_envelope, ceiling).
+    # Ceiling = HARDWARE_CONCURRENCY_CEILING = 20; floor = 1 so even a
+    # sandboxed/totally-failing-probe host still ticks one at a time.
     assert 1 <= host.max_concurrent <= 20, \
         f"concurrency outside expected range: {host.max_concurrent}"
 
@@ -98,7 +98,7 @@ def test_dispatch_host_is_local_ram_probed(tmp_path: Path):
 def test_dispatch_host_respects_oxi_max_concurrent_env(
     tmp_path: Path, monkeypatch
 ):
-    """OXI_MAX_CONCURRENT bypasses the RAM probe."""
+    """OXI_MAX_CONCURRENT bypasses the RAM+CPU probe."""
     monkeypatch.setenv("OXI_MAX_CONCURRENT", "3")
     host = SelfAdapter(repo_root=tmp_path).dispatch_hosts()[0]
     assert host.max_concurrent == 3

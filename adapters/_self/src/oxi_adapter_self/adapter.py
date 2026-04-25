@@ -24,7 +24,7 @@ from oxi_core.adapter import (
     PathsConfig,
     PromoteRecipe,
 )
-from oxi_core.compute_probe import recommend_ram_concurrency
+from oxi_core.compute_probe import recommend_concurrency
 
 logger = logging.getLogger(__name__)
 
@@ -96,19 +96,25 @@ class SelfAdapter:
 
     def dispatch_hosts(self) -> tuple[DispatchHost, ...]:
         # Concurrency is *probed* at every call, not hardcoded.
-        # `recommend_ram_concurrency` reads live free RAM (vm_stat on
-        # macOS, /proc/meminfo MemAvailable on Linux), reserves
-        # RAM_RESERVED_GB (default 8 GB) for OS + dashboard + IDE,
-        # and divides what's left by WORKER_MEM_GB (default 1.5 GB)
-        # to get a slot count. Capped at HARDWARE_CONCURRENCY_CEILING
-        # (default 20).
+        # `recommend_concurrency` reads live free RAM (vm_stat on macOS,
+        # /proc/meminfo MemAvailable on Linux) *and* the 5-minute load
+        # average (os.getloadavg) to compute both a RAM envelope and a
+        # CPU envelope.  The final concurrency is the minimum of:
+        #   - ram_envelope  = floor((free_gb - reserved) / worker_gb)
+        #   - cpu_envelope  = max(1, cpu_count - load_avg_5min)
+        #   - HARDWARE_CONCURRENCY_CEILING (default 20)
         #
-        # If the probe fails (sandboxed env, unrecognized platform),
-        # falls back to 1 — never silently runs more than the
-        # operator's machine can comfortably handle.
+        # On a busy host (load avg 13 on a 10-core Mac mini) the CPU
+        # envelope prevents oxi from adding workers that would push load
+        # to 36+.  On an idle host, RAM is the binding constraint.
+        #
+        # If any probe fails (sandboxed env, unrecognized platform),
+        # only the successfully-probed envelopes are applied; unprobed
+        # axes default to HARDWARE_CONCURRENCY_CEILING so they don't
+        # artificially constrain. Absolute floor is 1.
         #
         # Operator override: set OXI_MAX_CONCURRENT in the engine's
-        # environment to force a specific value, bypassing the probe.
+        # environment to force a specific value, bypassing all probes.
         import os
         forced = os.environ.get("OXI_MAX_CONCURRENT")
         if forced:
@@ -119,9 +125,9 @@ class SelfAdapter:
                     extra={"max_concurrent": max_concurrent},
                 )
             except ValueError:
-                max_concurrent = recommend_ram_concurrency()
+                max_concurrent = recommend_concurrency()
         else:
-            max_concurrent = recommend_ram_concurrency()
+            max_concurrent = recommend_concurrency()
             logger.info(
                 "self_adapter.concurrency.probed",
                 extra={"max_concurrent": max_concurrent},
