@@ -10,7 +10,7 @@ The wizard (`oxi init`) scaffolds a working adapter. This page explains every me
 
 The wizard creates:
 
-```
+```text
 oxi-adapter-my-app/
 ├── pyproject.toml          declares the oxi.adapters entry-point
 └── src/

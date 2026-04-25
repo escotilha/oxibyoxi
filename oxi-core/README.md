@@ -6,7 +6,7 @@ See the repo root [`README.md`](../README.md) and [`docs/PLAN.md`](../docs/PLAN.
 
 ## Layout
 
-```
+```text
 src/oxi_core/
 ├── cli.py                 CLI entrypoint
 ├── adapter.py             Adapter protocol + dataclasses

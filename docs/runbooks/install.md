@@ -63,7 +63,7 @@ The wizard asks:
 
 Example session (press Enter to accept bracketed defaults):
 
-```
+```text
 oxi init — 8-step adapter scaffold
 ========================================
 
@@ -111,7 +111,7 @@ oxi status
 
 Expected output (values match what you entered in the wizard):
 
-```
+```text
 oxi 0.1.0a4
   instance:  My App
   plan tier: standard
@@ -169,7 +169,7 @@ oxi v3 plan --dry-run
 
 Expected output:
 
-```
+```text
 roadmap: /path/to/your-project/roadmap.md
 parsed 3 item(s) — ok
 
@@ -197,7 +197,7 @@ oxi v3 tick --times 1
 
 Expected output:
 
-```
+```text
 oxi v3 tick: 1 cycle(s)
 cycle 1/1
   seed_from_roadmap: seeded 3 new task(s)

@@ -1,0 +1,82 @@
+// markdownlint-cli2 configuration for oxi.
+//
+// Goal: catch real style drift (broken heading order, missing
+// code-fence languages, inconsistent list markers) without
+// fighting prose. Run via the CI doc-lint workflow.
+{
+  "globs": [
+    "**/*.md"
+  ],
+  "ignores": [
+    "node_modules/**",
+    ".git/**",
+    "site/**",
+    "_diag/**",
+    "oxi-core/build/**",
+    "oxi-core/dist/**",
+    // Skill bundles ship as-is; we don't author them locally.
+    "oxi-core/src/oxi_core/skills/_bundled/**"
+  ],
+  "config": {
+    "default": true,
+
+    // MD013 line length — prose lines run long by design (keeps
+    // operator-friendly paragraphs scannable).
+    "line-length": false,
+
+    // MD033 inline HTML — the manual uses <details> + <summary>
+    // intentionally for collapsible runbook sections.
+    "no-inline-html": false,
+
+    // MD034 bare URLs — we drop bare URLs in commit refs and code
+    // blocks all the time; not worth wrapping each one.
+    "no-bare-urls": false,
+
+    // MD041 first-line h1 — release notes intentionally start with
+    // a frontmatter-style header that doesn't trip this rule, but
+    // a few legacy notes don't lead with H1. Don't fight it.
+    "first-line-h1": false,
+
+    // MD024 duplicate headings — "## Notes" appears in many docs;
+    // siblings_only=true means only fail when duplicates share a
+    // parent, which is the actual style problem worth catching.
+    "no-duplicate-heading": {
+      "siblings_only": true
+    },
+
+    // MD036 emphasis-as-heading — the roadmap *deliberately* uses
+    // **bold** items as a parser-readable item header. Allow.
+    "no-emphasis-as-heading": false,
+
+    // MD032 blanks-around-lists — many existing docs deliberately
+    // tighten lists against surrounding paragraphs for visual
+    // density. Not worth a treewide reformatting pass. We may
+    // tighten this later once the library settles.
+    "blanks-around-lists": false,
+
+    // MD049 emphasis-style — bikeshed. `*foo*` and `_foo_` render
+    // identically; we don't have a strong house style.
+    "emphasis-style": false,
+
+    // MD040 fenced code language — keep this on; missing language
+    // tags break syntax highlighting in the rendered manual.
+    "fenced-code-language": {
+      "allowed_languages": [
+        "bash",
+        "diff",
+        "json",
+        "jsonc",
+        "markdown",
+        "nginx",
+        "python",
+        "sh",
+        "shell",
+        "sql",
+        "text",
+        "toml",
+        "yaml",
+        ""
+      ]
+    }
+  }
+}

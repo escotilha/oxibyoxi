@@ -1,0 +1,84 @@
+# doc-lint.yml — keep docs/ honest as the codebase evolves.
+#
+# Two checks:
+#   - lychee: every internal markdown link resolves; every external
+#     URL returns a 200 (or 3xx). Flagged links fail the build.
+#   - markdownlint-cli2: consistent markdown style (heading order,
+#     list markers, line lengths, code-fence languages).
+#
+# Both run on the self-hosted oxi-vps runner. Both are independent
+# of source code — they only fire when docs/ or the configs change,
+# so adding a doc lint doesn't slow down code-only PRs.
+#
+# Security review notes:
+#   - No ${{ github.event.* }} interpolation in run: blocks.
+#   - lychee fetches external URLs; that's its job. Cache enabled
+#     to avoid re-fetching on every PR (rate-limit etiquette).
+#   - markdownlint runs in npx — pinned major version.
+
+name: doc-lint
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "**.md"
+      - ".lychee.toml"
+      - ".markdownlint-cli2.jsonc"
+      - ".github/workflows/doc-lint.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "**.md"
+      - ".lychee.toml"
+      - ".markdownlint-cli2.jsonc"
+      - ".github/workflows/doc-lint.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    name: lychee (broken-link check)
+    runs-on: [self-hosted, oxi-vps]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Restore lychee cache
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf  # v4.2.2
+        with:
+          path: .lycheecache
+          key: lychee-cache-${{ github.sha }}
+          restore-keys: lychee-cache-
+
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@82202e5e9c2f4ef1a55a3d02563e1cb6041e5332  # v2.7.0
+        with:
+          args: >-
+            --config .lychee.toml
+            --no-progress
+            --cache
+            --max-cache-age 7d
+            'docs/**/*.md'
+            'README.md'
+            'CHANGELOG.md'
+          fail: true
+
+  markdownlint:
+    name: markdownlint (style consistency)
+    runs-on: [self-hosted, oxi-vps]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Node 20
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: "20"
+
+      - name: Run markdownlint-cli2
+        # Pinned major version. The action runs in a Node sandbox
+        # with no network access beyond the npm registry.
+        # Rules + ignore patterns live in .markdownlint-cli2.jsonc.
+        run: npx -y markdownlint-cli2@0.13.0

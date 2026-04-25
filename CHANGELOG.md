@@ -57,4 +57,4 @@ PyPI name reservation. `oxi-core 0.0.0` and `oxi-adapter-reference 0.0.0` are sc
 [0.1.0a4]: https://github.com/escotilha/oxi/releases/tag/v0.1.0a4
 [0.1.0a3]: https://github.com/escotilha/oxi/releases/tag/v0.1.0a3
 [0.1.0a2]: https://github.com/escotilha/oxi/releases/tag/v0.1.0a2
-[0.1.0a1]: https://github.com/escotilha/oxi/releases/tag/v0.1.0a1
+[0.1.0a1]: docs/release-notes/v0.1.0a1.md

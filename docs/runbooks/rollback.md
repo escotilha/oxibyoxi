@@ -6,7 +6,7 @@ How to recover from a bad PyPI release of `oxi-core` or `oxi-adapter-reference`.
 
 ## Decision tree — yank or republish?
 
-```
+```text
 Did the bad release cause data loss, secret exposure, or a security
 regression (e.g., removed path-traversal guard, broken env whitelist)?
 │
@@ -115,14 +115,14 @@ All CI checks must be green before proceeding.
 
 For a pre-release fix, increment the pre-release suffix:
 
-```
+```text
 0.1.0a1 → 0.1.0a2
 0.1.0b2 → 0.1.0b3
 ```
 
 For a stable release fix, increment the patch:
 
-```
+```text
 0.1.0 → 0.1.1
 ```
 

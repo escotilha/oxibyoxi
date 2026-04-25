@@ -109,7 +109,7 @@ oxi v3 plan --dry-run
 
 Output when the format is correct:
 
-```
+```text
 roadmap: /path/to/project/roadmap.md
 parsed 6 item(s) — ok
 
@@ -121,7 +121,7 @@ parsed 6 item(s) — ok
 
 Output when the format is wrong:
 
-```
+```text
 roadmap: /path/to/project/roadmap.md
 parsed 0 item(s) — check format
 

@@ -74,7 +74,7 @@ The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks
 
 ## How it works
 
-```
+```text
 ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
 │  roadmap │→→→│  planner │→→→│ dispatch │→→→│pr_watcher│→→→│auto_merge│
 │   .md    │   │          │   │ claude -p│   │          │   │  critic  │

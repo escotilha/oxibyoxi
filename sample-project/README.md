@@ -6,7 +6,7 @@ This is not a real product. It exists so the orchestrator's loop can be exercise
 
 ## Layout
 
-```
+```text
 sample-project/
 ├── pyproject.toml          Standalone package, pytest configured
 ├── roadmap.md              Three toy tasks the adapter reads

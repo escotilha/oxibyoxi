@@ -32,7 +32,7 @@ This is verified by audit. If you find a `shell=True` call in `oxi-core/src/`, p
 
 When the engine spawns a `claude -p` subprocess, it does not inherit the supervisor's full environment. Only a small allowlist reaches the worker:
 
-```
+```text
 PATH, HOME, USER, LANG, TMPDIR, ANTHROPIC_API_KEY
 ```
 

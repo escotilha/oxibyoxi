@@ -55,7 +55,7 @@ oxi status
 
 The budget line shows current spend vs. thresholds:
 
-```
+```text
   budget (today): $3.41 spent / $5.00 warn / $20.00 hard — warn
 ```
 

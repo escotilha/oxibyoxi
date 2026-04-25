@@ -2,7 +2,7 @@
 
 ## CLI reference
 
-```
+```text
 oxi                           print banner + version
 oxi status                    task counts, budget, recent events
 oxi v3 tick [--times N]       run N engine cycles
@@ -63,7 +63,7 @@ The engine stops early if the killswitch is set or the budget hard-cap is reache
 
 While a tick is running, `oxi status` in another terminal shows live task state:
 
-```
+```text
 oxi 0.1.0a4
   instance:  My App
   plan tier: standard

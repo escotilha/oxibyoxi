@@ -43,7 +43,7 @@ Fresh repo, fresh package, fresh PyPI name. No rename migration to plan, because
 
 ## 4. Target architecture
 
-```
+```text
 escotilha/oxi/
 ├── oxi-core/                         Engine package → PyPI as oxi-core
 │   ├── pyproject.toml                name="oxi-core", console_script "oxi"
