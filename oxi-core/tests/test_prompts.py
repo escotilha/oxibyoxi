@@ -176,6 +176,18 @@ def test_dispatch_prompt_mentions_hook_discipline():
     assert "hook" in text.lower()
 
 
+def test_dispatch_prompt_instructs_incremental_commits():
+    register_adapter(_TestAdapter())
+    text = dispatch_prompt(_item(), branch_name="feat/x")
+    assert "Commit incrementally" in text
+
+
+def test_dispatch_prompt_mentions_draft_pr_fallback():
+    register_adapter(_TestAdapter())
+    text = dispatch_prompt(_item(), branch_name="feat/x")
+    assert "draft PR" in text
+
+
 # ---------------------------------------------------------------------------
 # Critic prompt
 # ---------------------------------------------------------------------------

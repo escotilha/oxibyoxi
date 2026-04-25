@@ -103,12 +103,27 @@ already checked out in the current worktree.
 Roadmap item: {item.identifier} (tier {item.tier})
 Title: {item.title}{subtitle}
 
-Implement this item. Follow the repo's existing conventions. When done:
+Implement this item. Follow the repo's existing conventions.
 
-1. Commit with a message of the form `{item.identifier}: {item.title}`.
+**Commit incrementally as you work.** Don't wait until everything is
+done — commit each meaningful unit (a working module, a passing test
+file, a config change) as soon as it's coherent. Use conventional-commit
+prefixes (feat/fix/test/docs). Many small commits is better than one fat
+commit, and dramatically better than uncommitted work that gets lost if
+your session ends early.
+
+When the implementation is complete:
+
+1. Make a final commit if anything is staged or unstaged:
+   `{item.identifier}: {item.title}`.
 2. Push the branch to origin.
 3. Open a pull request against the default branch with a description
    that includes the verification steps a reviewer should run.
+
+If you run out of turns or budget mid-implementation, stop cleanly:
+leave the branch with whatever commits you've made, push them, and open
+a draft PR explaining what's done and what's left. Partial committed
+work + draft PR beats uncommitted work + failed dispatch.
 
 Do not modify unrelated files. Do not bypass commit hooks. If the scope
 is larger than a single PR, stop and report back instead of forking
