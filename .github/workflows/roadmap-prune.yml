@@ -1,0 +1,69 @@
+# roadmap-prune.yml — weekly reconciler that opens a PR removing
+# shipped items from docs/roadmap.md.
+#
+# Triggers:
+#   - cron: every Sunday at 12:00 UTC
+#   - manual: workflow_dispatch
+#
+# How it decides what to prune:
+#   The script scripts/roadmap-prune.py marks an item shipped only
+#   when a substantive commit on main names its T-id AND touches at
+#   least one path under oxi-core/src/, adapters/, scripts/, .github/,
+#   or docs/runbooks/. Pure release-notes commits don't count.
+#
+# Output:
+#   When something to prune is found, the workflow opens a PR titled
+#   "chore(roadmap): prune shipped items" with the diff applied.
+#   When nothing changed, no PR is opened.
+
+name: roadmap-prune
+
+on:
+  schedule:
+    - cron: "0 12 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    name: prune docs/roadmap.md and open PR
+    runs-on: [self-hosted, oxi-vps]
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Run prune (apply)
+        # Static path; no event-payload interpolation. The script reads
+        # the repo's own docs/ and git log, no secrets needed.
+        run: |
+          python scripts/roadmap-prune.py --apply
+      - name: Open PR if changed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if git diff --quiet -- docs/roadmap.md; then
+            echo "roadmap-prune: no changes, skipping PR."
+            exit 0
+          fi
+          BR="chore/roadmap-prune-$(date -u +%Y%m%d)"
+          git config user.name "oxi-bot"
+          git config user.email "oxi-bot@users.noreply.github.com"
+          git checkout -b "$BR"
+          git add docs/roadmap.md
+          git commit -m "chore(roadmap): prune shipped items"
+          git push -u origin "$BR"
+          gh pr create \
+            --title "chore(roadmap): prune shipped items" \
+            --body "Automated prune by .github/workflows/roadmap-prune.yml. Items removed have a substantive merged commit on main older than the freshness window. Review the diff; merge if it matches reality." \
+            --label "chore" \
+            || true
