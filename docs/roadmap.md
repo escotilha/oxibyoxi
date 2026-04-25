@@ -2,7 +2,7 @@
 
 The queue the `oxi-adapter-self` dogfood loop picks from. Each item is a bold line shaped `**T{tier}-{N} · {title}**` followed by an italic subtitle — the planner reads this format.
 
-Keep it tight — 10-15 open items at a time. Items ship as individual PRs reviewed by Pierre (`auto_merge=False` in `SelfAdapter`).
+Keep it tight — 10-15 open items at a time. Items ship as individual PRs.
 
 Conventions:
 
@@ -10,85 +10,17 @@ Conventions:
 - **Tier 1** — user-visible polish, runbooks, CLI ergonomics.
 - **Tier 2** — internal cleanup, test coverage, refactors.
 
+The roadmap is auto-pruned weekly by `.github/workflows/roadmap-prune.yml` — items get removed when there's a substantive merged commit on `main` naming the T-id.
+
 ---
 
-## Tier 0
-
-**T0-1 · install runbook: zero-to-first-tick under 5 min**
-_new operators need a single-page walkthrough from pip install to `oxi v3 tick`. Write docs/runbooks/install.md covering pip install, adapter template, smoke tick. Must pass scripts/lint-for-leaks.sh._
-
-**T0-2 · rollback runbook for bad alpha releases**
-_document the PyPI yank vs republish decision tree using the 0.1.0a1 to 0.1.0a2 incident as the worked example. Land docs/runbooks/rollback.md._
-
-**T0-11 · worktree_provision drift repair**
-_if the target directory exists but the checked-out branch doesn't match the expected feature branch (main, detached HEAD, or a stale sibling branch), nuke and re-provision rather than failing. Today we surface a WorktreeError and the dispatch dies. Fix: validate HEAD via rev-parse --abbrev-ref, compare to expected, repair if drifted. Add git worktree prune before every add._
-
-**T0-101 · adapter entry-point discovery**
-_first-fork blocker. An installed adapter package should auto-register when any oxi command runs, via [project.entry-points."oxi.adapters"] in the adapter's pyproject.toml. Also accept OXI_ADAPTER=pkg:ClassName env var as an override. Without this, every operator has to write a registration snippet before oxi status will load — that's an unacceptable first-fork cliff. See docs/first-fork-checklist.md BLOCKER-1._
-
-**T0-102 · oxi v3 plan --dry-run**
-_first-fork blocker. Parse the roadmap, print what was found (tier, identifier, title, subtitle), don't touch the DB. Operators writing their first roadmap produce natural markdown like `## T0-1 — title` and silently get zero tasks seeded; dry-run surfaces the format pickiness at operator level. See docs/first-fork-checklist.md BLOCKER-3._
-
-**T0-103 · first-fork smoke test in CI**
-_new CI job that builds oxi-core from the same run's wheel, runs `oxi init` with scripted answers, then walks the happy path to a reconciliation-only tick. Catches regressions in the install experience before they land on main. See docs/first-fork-checklist.md proposed path #4._
-
-## Tier 1
-
-**T1-3 · oxi v3 status --json flag**
-_emit stable JSON with tasks/budget/heartbeat so the dashboard and ops scripts can reuse the status code path. Document schema in docs/status-json-schema.md._
-
-**T1-4 · ci_issue_filer — surface CI failures in the ledger**
-_new oxi_core.v3.ci_issue_filer module watches check runs on open PRs via GitHubClient; emits ci_failure_observed events. Use FakeGitHubClient for tests._
-
-**T1-5 · ANSI colors in oxi v3 tick output**
-_green=progress, yellow=stuck, red=failed. Respect NO_COLOR and skip on non-TTY. Output must stay stable when NO_COLOR=1._
-
-**T1-6 · dashboard last-10 events per task**
-_click a task row to expand its last 10 ledger events with timestamp and truncated payload. HTML-escape everything. No new HTTP route needed._
-
-**T1-7 · oxi v3 kill CLI ergonomics**
-_subcommand that writes/removes the killswitch file with confirmation. Surface state in oxi status header line._
-
-**T1-12 · auto_recover — retry rejected or failed PR dispatches**
-_new oxi_core.v3.auto_recover module. If a PR was rejected by the critic or CI failed hard, after a cooldown window reset the task to planned and re-seed it with a note in the brief. Implementation is oxi-shape (argv subprocess, FakeGitHubClient tests). Dashboard should label recovered tasks so operators can tell a retry from a first-run._
-
-**T1-13 · deep_fix — escalation for repeatedly-stuck tasks**
-_when a task has failed or been rejected N times, escalate model tier (sonnet to opus), loosen constraints on the prompt, or hand off to a dedicated worker session with more context. Adapter-configurable N, cooldown, and escalation recipe. Not about bypassing the critic; about giving the worker a better shot next try._
-
-**T1-14 · ledger_events — typed event-kind constants**
-_new oxi_core.v3.ledger_events with string constants for every event kind emitted across the codebase (dispatch_started, dispatch_succeeded, pr_observed, handoff_written, budget_hard_stop, ...). Migrate call sites to reference the constants. Reduces the string-drift class of bugs and gives the type checker something to hold onto._
-
-**T1-15 · relax success classification when PR exists**
-_when the worker commits, pushes, and opens a PR successfully but claude exits non-zero (pre-commit hook tail, gh pr create post-success exit), dispatch currently marks the task failed — preventing retry and requiring manual DB correction. Observed on every single dogfood dispatch in session 2026-04-24 (4-of-4 false failures). Fix: after dispatch, if the expected branch has a commit ahead of origin/main AND a PR exists, classify SUCCESS regardless of exit code. Dogfood evidence is in ledger events for T0-11, T1-12, T1-13._
-
-**T1-16 · bandit + CodeQL SAST in CI**
-_add Python-aware static analysis to close the biggest gap in the security-scan surface. bandit catches unsafe subprocess patterns, weak hashing, insecure temp-file handling; CodeQL catches taint flows and logic bugs across PRs. Both run as dedicated CI jobs with SHA-pinned actions; findings surface as PR annotations. Tunes: ignore oxi's intentional argv-form subprocess pattern (bandit B603) while keeping shell=True detection._
-
-**T1-17 · SBOM generation for each release**
-_emit a CycloneDX SBOM during scripts/release.sh (or as a release-time CI job) so operators can audit the dependency graph shipped in every pip install. Include it as a release artifact on GitHub. Use cyclonedx-bom python package; stamp the SBOM into release notes._
-
-**T1-18 · auto-healing engine self-state**
-_complement T1-12 (auto_recover) and T1-13 (deep_fix) with engine-level self-monitoring. If N consecutive dispatches fail, pause dispatch and emit engine_unhealthy event instead of churning budget. Surface in dashboard with health banner. Operator resets via `oxi v3 unkill` (or new `oxi v3 heal`). Prevents runaway failures from burning the daily cap during unattended runs._
-
 ## Tier 2
-
-**T2-8 · extract repeat SQL patterns into query helpers**
-_new oxi_core.v3.query_helpers with typed wrapper functions for the five-plus repeated patterns (select-task-by-id, insert-event, atomic-status-update, etc). No behavior change._
-
-**T2-9 · replace str(path) with os.fspath at boundaries**
-_tighten path-to-str casts at subprocess and SQLite boundaries. Update loose docstrings. No behavior change._
-
-**T2-10 · pytest-timeout guard for CI**
-_add pytest-timeout to dev deps; default 30s per-test, 180s on @pytest.mark.slow. Cuts CI hangs when a server-thread test wedges._
-
-**T2-11 · auto-observation: engine reads its own ledger and proposes roadmap items**
-_the engine already auto-writes fixes via dogfood dispatch, but it doesn't yet auto-identify what to fix. New oxi_core.v3.auto_observe module watches the ledger for signals: repeated dispatch failures on the same code path, critic-rejection patterns, worktree-drift events clustering on specific tasks. Emits a proposed roadmap entry when a pattern crosses threshold (e.g. 3 occurrences in 48h). Operator reviews + accepts via `oxi v3 observe --accept <id>`. Closes the self-improvement loop: engine doesn't just fix its own bugs, it notices them._
 
 **T2-12 · mypy strict typing pass**
 _add mypy to dev deps + CI job. Start with oxi-core/src/oxi_core/v3/ (the engine core), then expand. strict=True aspirationally; disable_error_code list for acknowledged gaps. Catches a class of bugs tests miss — silent None returns, wrong Protocol conformance, dataclass field types._
 
 **T2-13 · coverage gate: 80% on new code**
-_add coverage.py + pytest-cov to CI. Fail the build if a PR introduces new lines under 80% coverage. Keeps the engine from writing untested code via dogfood. Uses codecov.io or CI-local gate._
+_add coverage.py + pytest-cov to CI. Fail the build if a PR introduces new lines under 80% coverage. Keeps the engine from writing untested code via dogfood._
 
 **T2-14 · nightly integration test against real GitHub**
 _new CI schedule that runs once a day against a dedicated sandbox repo, exercising: oxi init, pip install, real dispatch (no --real-claude, just the GitHub calls via GhCliClient), real PR open/merge/watch. Catches GitHub API drift + gh CLI breakage. Alerts operator on failure but doesn't block PRs._
@@ -99,29 +31,24 @@ _record dispatch latency, DB query p50/p95, dashboard render time on every main 
 **T2-16 · doc lint (lychee + markdownlint)**
 _CI job that checks docs/ for broken internal + external links, markdown style consistency. Protects the manual from rot as the codebase evolves underneath it._
 
-## Tier 3 (long-horizon)
-
-**T3-1 · product-spec-to-roadmap ingester**
-_accept a product spec (markdown, PDF, or plain text) and emit a properly-formatted docs/roadmap.md. Uses Claude to parse the spec into tier-assigned items with identifiers. Human reviews before seeding. Key design constraint: must pass scripts/lint-for-leaks.sh — AI-generated identifiers can't leak project-specific strings. Enables non-coders to onboard onto oxi with a spec, not a roadmap._
-
-**T3-2 · compute-aware onboarding probe**
-_during `oxi init`, probe the host: total RAM (`sysctl hw.memsize`), CPU cores (`nproc`), plan tier (via `claude --version`/ANTHROPIC_API_KEY metadata), free disk. Recommend a `max_concurrent` + `daily_hard_cap` appropriate to the machine. Safe default caps (1, $5) if probe fails. Makes the first-run experience self-tuning instead of asking the operator to guess._
-
 ---
 
 ## Done (moved to release notes)
 
-See `docs/release-notes/` for shipped items. Recent:
+The 0.1.0a* alpha series and the 0.1.0b1 cut shipped 24 of the original roadmap items:
 
-- `v0.1.0a2` — dynamic `__version__` + initial alpha
-- `v0.1.0a1` — first usable alpha (superseded)
-- Pre-alpha security hardening (#41): path-traversal defense, pr_number XSS, `ANTHROPIC_API_KEY` plumbing, dashboard 404, SHA-pinned actions, gitleaks + pip-audit CI, Dependabot, `SECURITY.md`
+- T0-1, T0-2, T0-11, T0-101, T0-102, T0-103
+- T1-3, T1-4, T1-5, T1-6, T1-7, T1-12, T1-13, T1-14, T1-15, T1-16, T1-17, T1-18
+- T2-8, T2-9, T2-10, T2-11
+- T3-1, T3-2
+
+See `docs/release-notes/` for the per-version detail.
 
 ---
 
 ## Notes for the dogfood engine
 
-- The adapter (`oxi-adapter-self`) enforces `auto_merge=False`. Every PR the engine opens waits for Pierre's review.
+- The adapter (`oxi-adapter-self`) enforces `auto_merge=False` by default. Operator can flip to `True` once the repo allows auto-merge (currently blocked by GH Free + private repo).
 - Budget: hard cap $20/day, $2/task Opus, $0.50/task Sonnet. Tasks that estimate beyond per-task cap get held at `queued` until operator intervention.
 - Serial dispatch — `max_concurrent=1`. No fan-out until the single-task loop is stable for two weeks.
 - Identifiers here (T0-*, T1-*, T2-*) are what the engine sees. Keep them stable — renaming invalidates handoff snapshots and ledger cross-references.
