@@ -15,30 +15,47 @@ This module defines:
 - Dataclasses for structured return values
 - `Adapter` Protocol with 10 methods
 - Module-level registration: register, get, clear
-- Auto-discovery: load_adapter() via entry-points or OXI_ADAPTER env var
+- Auto-discovery: load_adapter() via oxi.toml, entry-points, or
+  OXI_ADAPTER env var
 
 No core module imports from outside this file's public surface. The
 `Adapter` protocol is the stable contract; internals may change.
 
 Auto-discovery
 --------------
-Adapter packages declare themselves via a pyproject.toml entry-point:
+Resolution order (first wins):
 
-    [project.entry-points."oxi.adapters"]
-    myproject = "oxi_adapter_myproject:MyAdapter"
+1. **Already registered** — explicit ``register_adapter()`` calls always
+   take priority.
 
-`load_adapter()` iterates all installed `oxi.adapters` entry-points and
-calls `register_adapter()` on the first one it finds. If more than one
-is installed a `MultipleAdaptersError` is raised so the operator can
-pin exactly one with the `OXI_ADAPTER` env var:
+2. **OXI_ADAPTER env var** — ``OXI_ADAPTER=module:ClassName``.  The
+   class is imported and instantiated with no arguments, then
+   registered.
 
-    OXI_ADAPTER=oxi_adapter_myproject:MyAdapter oxi status
+3. **oxi.toml** — if an ``oxi.toml`` file exists in the current working
+   directory, its ``[adapter]`` section is read::
 
-The env var always wins over entry-point discovery and is useful for
-testing or when two adapters coexist in the same virtualenv.
+       [adapter]
+       class = "oxi_adapter_myproject:MyAdapter"
 
-`load_adapter()` is idempotent: if an adapter is already registered it
-returns immediately without touching the entry-points or the env var.
+       [adapter.kwargs]
+       repo_root = "."
+
+   ``class`` is a ``module:ClassName`` spec.  ``kwargs`` is an optional
+   table of keyword arguments forwarded to the constructor.  String
+   values whose key ends with ``_root``, ``_path``, or ``_dir`` are
+   resolved as paths relative to the directory that contains
+   ``oxi.toml`` before being passed to the constructor.
+
+4. **Entry-point discovery** — packages that declare
+   ``[project.entry-points."oxi.adapters"]`` in their pyproject.toml.
+   If exactly one is installed it is loaded and registered with no
+   constructor arguments.  If more than one is installed a
+   ``MultipleAdaptersError`` is raised (use ``OXI_ADAPTER`` to
+   disambiguate).
+
+``load_adapter()`` is idempotent: if an adapter is already registered it
+returns immediately.
 """
 
 from __future__ import annotations
@@ -47,6 +64,7 @@ import importlib
 import os
 from dataclasses import dataclass, field
 from importlib.metadata import entry_points
+from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from . import defaults
@@ -280,6 +298,11 @@ def clear_adapter() -> None:
 
 _ENTRY_POINT_GROUP = "oxi.adapters"
 _ENV_VAR = "OXI_ADAPTER"
+_TOML_CONFIG_NAME = "oxi.toml"
+
+# Keys whose string values are resolved as paths relative to the TOML file.
+# Any kwarg whose name ends with one of these suffixes is treated as a path.
+_PATH_KWARG_SUFFIXES = ("_root", "_path", "_dir")
 
 
 class MultipleAdaptersError(RuntimeError):
@@ -292,17 +315,21 @@ class MultipleAdaptersError(RuntimeError):
 
 
 class AdapterLoadError(RuntimeError):
-    """Raised when the OXI_ADAPTER env var or an entry-point cannot be loaded."""
+    """Raised when the OXI_ADAPTER env var, oxi.toml, or an entry-point cannot
+    be loaded."""
 
 
-def _load_from_env(spec: str) -> Adapter:
-    """Import and instantiate an adapter class from a ``module:ClassName`` spec.
+def _import_class(spec: str, source_label: str) -> type:
+    """Import a class from a ``module:ClassName`` spec.
+
+    ``source_label`` is included in error messages (e.g. ``"OXI_ADAPTER"``
+    or ``"oxi.toml [adapter] class"``).
 
     Raises `AdapterLoadError` on any import/attribute failure.
     """
     if ":" not in spec:
         raise AdapterLoadError(
-            f"{_ENV_VAR}={spec!r} is not a valid 'module:ClassName' spec; "
+            f"{source_label}={spec!r} is not a valid 'module:ClassName' spec; "
             "expected something like 'oxi_adapter_myproject:MyAdapter'"
         )
     module_path, class_name = spec.rsplit(":", 1)
@@ -310,22 +337,111 @@ def _load_from_env(spec: str) -> Adapter:
         mod = importlib.import_module(module_path)
     except ModuleNotFoundError as exc:
         raise AdapterLoadError(
-            f"{_ENV_VAR}: cannot import module {module_path!r}: {exc}"
+            f"{source_label}: cannot import module {module_path!r}: {exc}"
         ) from exc
     try:
         cls = getattr(mod, class_name)
     except AttributeError as exc:
         raise AdapterLoadError(
-            f"{_ENV_VAR}: module {module_path!r} has no attribute {class_name!r}"
+            f"{source_label}: module {module_path!r} has no attribute {class_name!r}"
         ) from exc
+    return cls  # type: ignore[return-value]
+
+
+def _load_from_env(spec: str) -> Adapter:
+    """Import and instantiate an adapter class from a ``module:ClassName`` spec.
+
+    Raises `AdapterLoadError` on any import/attribute failure.
+    """
+    cls = _import_class(spec, _ENV_VAR)
     try:
         instance: Adapter = cls()
     except TypeError as exc:
         raise AdapterLoadError(
-            f"{_ENV_VAR}: {class_name}() raised TypeError — does it require "
+            f"{_ENV_VAR}: {cls.__name__}() raised TypeError — does it require "
             f"constructor arguments? ({exc})"
         ) from exc
     return instance
+
+
+def _resolve_path_kwargs(kwargs: dict[str, object], toml_dir: Path) -> dict[str, object]:
+    """Resolve string kwargs whose keys end with a path suffix.
+
+    Paths are resolved relative to ``toml_dir`` (the directory that
+    contains ``oxi.toml``). Non-string values and keys without a path
+    suffix are passed through unchanged.
+    """
+    resolved: dict[str, object] = {}
+    for key, value in kwargs.items():
+        if isinstance(value, str) and any(key.endswith(s) for s in _PATH_KWARG_SUFFIXES):
+            resolved[key] = str((toml_dir / value).resolve())
+        else:
+            resolved[key] = value
+    return resolved
+
+
+def _load_from_toml(toml_path: Path) -> Adapter | None:
+    """Read ``oxi.toml`` and instantiate the configured adapter.
+
+    Returns ``None`` if the file has no ``[adapter]`` section (so the
+    caller can fall through to entry-point discovery).
+
+    Raises `AdapterLoadError` if the section is present but malformed or
+    the class cannot be imported / instantiated.
+    """
+    try:
+        import tomllib  # Python 3.11+
+    except ModuleNotFoundError:  # pragma: no cover — Python < 3.11 fallback
+        try:
+            import tomli as tomllib  # type: ignore[no-redef]
+        except ModuleNotFoundError as exc:
+            raise AdapterLoadError(
+                "oxi.toml: cannot read TOML — install 'tomli' on Python < 3.11"
+            ) from exc
+
+    try:
+        with toml_path.open("rb") as fh:
+            config = tomllib.load(fh)
+    except Exception as exc:
+        raise AdapterLoadError(
+            f"oxi.toml: failed to parse {toml_path}: {exc}"
+        ) from exc
+
+    adapter_section = config.get("adapter")
+    if adapter_section is None:
+        return None  # file present but no [adapter] — fall through
+
+    spec = adapter_section.get("class")
+    if not spec:
+        raise AdapterLoadError(
+            f"oxi.toml: [adapter] section is missing the 'class' key in {toml_path}"
+        )
+
+    raw_kwargs: dict[str, object] = adapter_section.get("kwargs", {})
+    toml_dir = toml_path.parent
+    kwargs = _resolve_path_kwargs(raw_kwargs, toml_dir)
+
+    cls = _import_class(spec, f"oxi.toml [adapter] class")
+    try:
+        instance: Adapter = cls(**kwargs)
+    except TypeError as exc:
+        raise AdapterLoadError(
+            f"oxi.toml: {cls.__name__}(**kwargs) raised TypeError — "
+            f"check the [adapter.kwargs] table in {toml_path}: {exc}"
+        ) from exc
+    return instance
+
+
+def find_oxi_toml(start: Path | None = None) -> Path | None:
+    """Return the path to ``oxi.toml`` if one exists in ``start`` (default: CWD).
+
+    Only looks in the given directory, not parent directories, to keep
+    the resolution predictable for operators using launchd/systemd units
+    that ``cd`` into the repo root.
+    """
+    directory = start if start is not None else Path.cwd()
+    candidate = directory / _TOML_CONFIG_NAME
+    return candidate if candidate.is_file() else None
 
 
 def load_adapter() -> None:
@@ -339,7 +455,12 @@ def load_adapter() -> None:
     2. **OXI_ADAPTER env var** — ``OXI_ADAPTER=module:ClassName``. The class
        is imported and instantiated with no arguments, then registered.
 
-    3. **Entry-point discovery** — all packages that declare
+    3. **oxi.toml** — if ``oxi.toml`` exists in the current working directory
+       and contains an ``[adapter]`` section, the class named by ``class`` is
+       imported and instantiated with the keyword arguments from
+       ``[adapter.kwargs]`` (paths resolved relative to the toml file).
+
+    4. **Entry-point discovery** — all packages that declare
        ``[project.entry-points."oxi.adapters"]`` in their pyproject.toml are
        collected. Each entry-point value must be a ``module:ClassName`` spec.
        If exactly one is found it is loaded and registered. If more than one
@@ -352,7 +473,8 @@ def load_adapter() -> None:
     normal user-facing message.
 
     Raises:
-        AdapterLoadError: env var or entry-point spec cannot be imported.
+        AdapterLoadError: env var, oxi.toml, or entry-point spec cannot be
+            imported.
         MultipleAdaptersError: more than one entry-point is installed and
             ``OXI_ADAPTER`` is not set.
         InvalidAdapterError: loaded class does not satisfy the Adapter
@@ -369,7 +491,15 @@ def load_adapter() -> None:
         register_adapter(adapter)
         return
 
-    # 3. Entry-point discovery.
+    # 3. oxi.toml in CWD.
+    toml_path = find_oxi_toml()
+    if toml_path is not None:
+        adapter = _load_from_toml(toml_path)
+        if adapter is not None:
+            register_adapter(adapter)
+            return
+
+    # 4. Entry-point discovery.
     eps = list(entry_points(group=_ENTRY_POINT_GROUP))
     if not eps:
         return  # nothing installed; let _require_adapter emit the friendly error
@@ -395,7 +525,8 @@ def load_adapter() -> None:
     except TypeError as exc:
         raise AdapterLoadError(
             f"Adapter class {ep.value!r} raised TypeError on instantiation — "
-            f"does it require constructor arguments? ({exc})"
+            f"does it require constructor arguments? Use oxi.toml to supply "
+            f"kwargs. ({exc})"
         ) from exc
 
     register_adapter(adapter)
