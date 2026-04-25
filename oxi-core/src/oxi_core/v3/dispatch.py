@@ -60,6 +60,7 @@ from .dispatch_invoke import (
 from .engine_health import EngineHealth
 from .engine_state import EngineState
 from .ledger_events import LedgerEvent
+from .pr_overlap import OverlapChecker, OverlapReport, check_overlap
 from .worktree_provision import WorktreeError, provision
 
 logger = logging.getLogger(__name__)
@@ -243,9 +244,25 @@ class Task:
     # Optional columns — present in the schema but not always populated.
     failed_at: str | None = None
     failure_reason: str | None = None
+    # files_touched: JSON array of paths this task is expected to modify.
+    # Populated by the planner / ingest step. Used by the overlap gate.
+    files_touched: tuple[str, ...] = ()
+    # last_deferred_at: ISO timestamp set when the overlap gate skips this
+    # task. Cleared (set to NULL) when the task is actually dispatched.
+    last_deferred_at: str | None = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> Task:
+        # Parse files_touched from JSON; treat malformed values as empty.
+        raw_files = _safe_column(row, "files_touched") or "[]"
+        try:
+            files_list = json.loads(raw_files)
+            files_touched: tuple[str, ...] = tuple(
+                f for f in files_list if isinstance(f, str) and f
+            )
+        except (TypeError, ValueError):
+            files_touched = ()
+
         return cls(
             id=row["id"],
             identifier=row["identifier"],
@@ -260,6 +277,8 @@ class Task:
             updated_at=row["updated_at"],
             failed_at=_safe_column(row, "failed_at"),
             failure_reason=_safe_column(row, "failure_reason"),
+            files_touched=files_touched,
+            last_deferred_at=_safe_column(row, "last_deferred_at"),
         )
 
     def as_roadmap_item(self) -> RoadmapItem:
@@ -308,6 +327,9 @@ def _pick_next_planned(
     stable and deterministic — useful for tests. Real adapters can
     layer priority/weights on top; this function is intentionally
     simple.
+
+    The overlap gate calls this with limit > 1 so it can find a
+    non-overlapping alternative when the first candidate is deferred.
     """
     rows = conn.execute(
         "SELECT * FROM task WHERE status = 'planned' "
@@ -315,6 +337,45 @@ def _pick_next_planned(
         (limit,),
     ).fetchall()
     return [Task.from_row(r) for r in rows]
+
+
+def _defer_task(
+    conn: sqlite3.Connection,
+    task_id: int,
+    report: OverlapReport,
+) -> None:
+    """Stamp ``last_deferred_at`` on a planned task whose files overlap with open PRs.
+
+    The task remains ``planned``; only the timestamp and a ledger event
+    are written. The next call to ``_pick_next_planned`` will return this
+    task again in priority order, so it will be re-evaluated on the next
+    tick once overlapping PRs are merged.
+
+    Parameters
+    ----------
+    conn:
+        SQLite connection (transaction is managed here).
+    task_id:
+        The task's primary key.
+    report:
+        The :class:`OverlapReport` that triggered the deferral; embedded
+        in the ledger event payload for observability.
+    """
+    now = _now_iso()
+    payload = {
+        "overlapping_prs": list(report.overlapping_prs),
+        "overlapping_files": list(report.overlapping_files),
+    }
+    with conn:
+        conn.execute(
+            "UPDATE task SET last_deferred_at = ?, updated_at = ? "
+            "WHERE id = ?",
+            (now, now, task_id),
+        )
+        conn.execute(
+            "INSERT INTO event (task_id, kind, payload) VALUES (?, ?, ?)",
+            (task_id, LedgerEvent.DISPATCH_DEFERRED, json.dumps(payload)),
+        )
 
 
 def _transition_to_dispatched(
@@ -415,6 +476,48 @@ def _record_outcome(
         )
 
 
+def _fetch_open_pr_numbers(repo: str) -> tuple[int, ...]:
+    """Return open PR numbers for ``repo`` via ``gh pr list``.
+
+    Used by the overlap gate to enumerate what's currently open so it
+    can then fetch file lists for each.  Returns an empty tuple on any
+    error so the gate fails open (no overlap = let the dispatch proceed).
+
+    The limit of 100 matches ``GhCliClient.list_open_prs`` — open PRs
+    beyond 100 are rare and the risk of missing an overlap there is
+    lower than the risk of blocking the engine unnecessarily.
+    """
+    try:
+        proc = subprocess.run(
+            [
+                "gh", "pr", "list",
+                "--repo", repo,
+                "--state", "open",
+                "--json", "number",
+                "--limit", "100",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            logger.warning(
+                "dispatch.overlap_gate: gh pr list failed (%d); "
+                "skipping overlap check (fail-open)",
+                proc.returncode,
+            )
+            return ()
+        items = json.loads(proc.stdout.strip() or "[]")
+        return tuple(int(item["number"]) for item in items if "number" in item)
+    except (FileNotFoundError, OSError, ValueError, KeyError) as exc:
+        logger.warning(
+            "dispatch.overlap_gate: could not fetch open PRs (%s); "
+            "skipping overlap check (fail-open)",
+            exc,
+        )
+        return ()
+
+
 def is_orphan_reapable(task: Task) -> bool:
     """Return True if this task is safe to abandon on an orphan check.
 
@@ -445,6 +548,12 @@ async def dispatch_one(
     # _maybe_upgrade_to_success without needing a real git remote or gh CLI.
     _check_commits: Callable[[Path, str], bool] | None = None,
     _check_pr: Callable[[str, str], bool] | None = None,
+    # Injectable for tests: supply a pre-built OverlapChecker so tests
+    # can inject fake PR file-lists without shelling to gh.
+    _overlap_checker: OverlapChecker | None = None,
+    # Injectable for tests: override open-PR number discovery so tests
+    # don't need a live GitHub API.
+    _open_pr_numbers: tuple[int, ...] | None = None,
 ) -> DispatchResult | None:
     """Dispatch the next planned task, or return None if nothing to do.
 
@@ -452,6 +561,7 @@ async def dispatch_one(
     - ``engine_state.is_stopping()`` is True at entry
     - ``engine_health.is_unhealthy()`` is True (paused after consecutive failures)
     - no ``planned`` tasks exist
+    - all planned tasks are deferred by the file-overlap gate
 
     Raises on infrastructure failures (worktree provisioning error,
     missing adapter). Does not raise on claude failures — those are
@@ -462,6 +572,17 @@ async def dispatch_one(
 
     ``engine_health`` is optional for backwards compatibility with callers
     that don't yet pass it.  If None, health-gating is skipped.
+
+    File-overlap gate (T0-104)
+    --------------------------
+    Before claiming a task, we query the open PRs on the target repo and
+    compare the task's ``files_touched`` against each PR's file list. If
+    any file overlaps we defer the task (stamp ``last_deferred_at``, emit
+    ``dispatch_deferred``) and try the next candidate in priority order.
+    If all candidates overlap we return None (nothing to dispatch this
+    tick). The gate is **fail-open**: any error fetching PR file lists is
+    logged and treated as "no overlap" so a gh outage never blocks the
+    engine entirely.
     """
     if engine_state.is_stopping():
         logger.info("dispatch: engine stopping, skipping tick")
@@ -482,10 +603,70 @@ async def dispatch_one(
         logger.info("dispatch: budget hard-stop reached, skipping tick")
         return None
 
-    tasks = _pick_next_planned(conn, limit=1)
-    if not tasks:
+    # ---------------------------------------------------------------------------
+    # File-overlap gate (T0-104)
+    # ---------------------------------------------------------------------------
+    # Fetch up to _OVERLAP_SCAN_LIMIT candidates and walk them in priority
+    # order, deferring any whose files_touched overlaps with an open PR.
+    # Pick the first non-overlapping one for dispatch.
+    _OVERLAP_SCAN_LIMIT = 20  # safety cap: avoid unbounded DB scan
+    candidates = _pick_next_planned(conn, limit=_OVERLAP_SCAN_LIMIT)
+    if not candidates:
         return None
-    task = tasks[0]
+
+    repo = adapter.github_repo()
+
+    # Build or reuse the overlap checker (injectable for tests).
+    if _overlap_checker is None:
+        try:
+            from .pr_overlap import GhCliPrFilesClient
+            gh_client = GhCliPrFilesClient()
+            _overlap_checker = OverlapChecker(client=gh_client, repo=repo)
+        except Exception as exc:  # pragma: no cover — defensive only
+            logger.warning(
+                "dispatch: could not build OverlapChecker (%s); "
+                "skipping overlap gate (fail-open)",
+                exc,
+            )
+            _overlap_checker = None
+
+    # Discover open PR numbers (injectable for tests).
+    if _open_pr_numbers is None:
+        open_pr_numbers = _fetch_open_pr_numbers(repo)
+    else:
+        open_pr_numbers = _open_pr_numbers
+
+    task: Task | None = None
+    for candidate in candidates:
+        if not candidate.files_touched or _overlap_checker is None:
+            # No expected file scope or no checker → skip gate, accept.
+            task = candidate
+            break
+        report = check_overlap(
+            planned_files=candidate.files_touched,
+            open_pr_numbers=open_pr_numbers,
+            checker=_overlap_checker,
+        )
+        if report.overlaps:
+            logger.info(
+                "dispatch.overlap_gate: deferring task=%s "
+                "overlapping_prs=%s overlapping_files=%s",
+                candidate.identifier,
+                report.overlapping_prs,
+                report.overlapping_files,
+            )
+            _defer_task(conn, candidate.id, report)
+        else:
+            task = candidate
+            break
+
+    if task is None:
+        logger.info(
+            "dispatch: all %d candidates deferred by overlap gate; "
+            "nothing to dispatch this tick",
+            len(candidates),
+        )
+        return None
 
     # Provision a worktree for the task. The worktree lives under the
     # first dispatch host's worktree_root.
@@ -635,6 +816,9 @@ async def dispatch_loop(
     # Injectable for tests: forwarded to dispatch_one → _maybe_upgrade_to_success.
     _check_commits: Callable[[Path, str], bool] | None = None,
     _check_pr: Callable[[str, str], bool] | None = None,
+    # Injectable for tests: forwarded to dispatch_one → overlap gate.
+    _overlap_checker: OverlapChecker | None = None,
+    _open_pr_numbers: tuple[int, ...] | None = None,
 ) -> list[DispatchResult]:
     """Run the dispatch step up to ``max_iterations`` times.
 
@@ -645,7 +829,7 @@ async def dispatch_loop(
     Stops early when any of:
     - engine_state requests stop
     - engine_health is unhealthy (consecutive failures exceeded threshold)
-    - dispatch_one() returns None (no planned tasks left)
+    - dispatch_one() returns None (no planned tasks left or all deferred)
 
     The ``concurrency`` parameter controls how many dispatches run in
     parallel:
@@ -660,9 +844,10 @@ async def dispatch_loop(
     'planned'`` in dispatch_one), so concurrent calls never race onto
     the same task — at most one winner per row.
 
-    The ``_check_commits`` and ``_check_pr`` parameters are for testing
-    only; production callers should leave them as None (defaults apply).
-    They are forwarded verbatim to each ``dispatch_one`` call.
+    The ``_check_commits``, ``_check_pr``, ``_overlap_checker``, and
+    ``_open_pr_numbers`` parameters are for testing only; production
+    callers should leave them as None (defaults apply).  They are
+    forwarded verbatim to each ``dispatch_one`` call.
     """
     if concurrency is None:
         # Sum across all hosts; the dispatch_pool picks per-host
@@ -683,6 +868,8 @@ async def dispatch_loop(
             extra_env=extra_env,
             _check_commits=_check_commits,
             _check_pr=_check_pr,
+            _overlap_checker=_overlap_checker,
+            _open_pr_numbers=_open_pr_numbers,
         )
     return await _dispatch_loop_parallel(
         conn=conn,
@@ -697,6 +884,8 @@ async def dispatch_loop(
         extra_env=extra_env,
         _check_commits=_check_commits,
         _check_pr=_check_pr,
+        _overlap_checker=_overlap_checker,
+        _open_pr_numbers=_open_pr_numbers,
     )
 
 
@@ -713,6 +902,8 @@ async def _dispatch_loop_serial(
     extra_env: dict[str, str] | None,
     _check_commits: Callable[[Path, str], bool] | None,
     _check_pr: Callable[[str, str], bool] | None,
+    _overlap_checker: OverlapChecker | None = None,
+    _open_pr_numbers: tuple[int, ...] | None = None,
 ) -> list[DispatchResult]:
     """The original serial dispatch loop.
 
@@ -737,6 +928,8 @@ async def _dispatch_loop_serial(
             extra_env=extra_env,
             _check_commits=_check_commits,
             _check_pr=_check_pr,
+            _overlap_checker=_overlap_checker,
+            _open_pr_numbers=_open_pr_numbers,
         )
         if outcome is None:
             break
@@ -758,6 +951,8 @@ async def _dispatch_loop_parallel(
     extra_env: dict[str, str] | None,
     _check_commits: Callable[[Path, str], bool] | None,
     _check_pr: Callable[[str, str], bool] | None,
+    _overlap_checker: OverlapChecker | None = None,
+    _open_pr_numbers: tuple[int, ...] | None = None,
 ) -> list[DispatchResult]:
     """Bounded-parallel dispatch loop.
 
@@ -765,7 +960,7 @@ async def _dispatch_loop_parallel(
     When one finishes, immediately spawns the next (up to
     ``max_iterations`` total). Stops when:
     - the spawn budget is exhausted
-    - dispatch_one returns None (no planned tasks left)
+    - dispatch_one returns None (no planned tasks left or all deferred)
     - engine_state.is_stopping() turns true
     - engine_health.is_unhealthy() turns true
 
@@ -806,6 +1001,8 @@ async def _dispatch_loop_parallel(
             extra_env=extra_env,
             _check_commits=_check_commits,
             _check_pr=_check_pr,
+            _overlap_checker=_overlap_checker,
+            _open_pr_numbers=_open_pr_numbers,
         )
         in_flight.add(asyncio.create_task(coro))
         spawned += 1
@@ -953,6 +1150,8 @@ __all__ = [
     "Task",
     "_branch_has_commits_ahead",
     "_count_recent_terminal_failures",
+    "_defer_task",
+    "_fetch_open_pr_numbers",
     "_maybe_upgrade_to_success",
     "_pr_exists_for_branch",
     "dispatch_loop",

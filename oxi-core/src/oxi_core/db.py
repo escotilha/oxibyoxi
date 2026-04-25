@@ -143,6 +143,16 @@ CREATE INDEX IF NOT EXISTS idx_front_tier_last_seeded ON front(tier, last_seeded
 """
 
 
+# Version 4: last_deferred_at column for the file-overlap dispatch gate
+# (T0-104).  When a planned task's ``files_touched`` overlaps with an open
+# PR, the dispatcher defers it: re-marks it ``planned`` and stamps this
+# column.  The column is nullable — most tasks are never deferred.
+MIGRATION_V4_LAST_DEFERRED_AT: str = """
+ALTER TABLE task ADD COLUMN last_deferred_at TEXT;
+CREATE INDEX IF NOT EXISTS idx_task_last_deferred ON task(last_deferred_at);
+"""
+
+
 # Migration list — append-only. Each (version, sql) pair runs in order if
 # not already recorded in schema_migrations. Do NOT edit applied migrations;
 # add a new one instead.
@@ -150,6 +160,7 @@ MIGRATIONS: tuple[tuple[int, str], ...] = (
     (1, SCHEMA_SQL),
     (2, MIGRATION_V2_PR_NUMBER),
     (3, MIGRATION_V3_FRONT_ROADMAP),
+    (4, MIGRATION_V4_LAST_DEFERRED_AT),
 )
 
 

@@ -67,6 +67,9 @@ class LedgerEvent(StrEnum):
     DISPATCH_TIMEOUT = auto()
     # Terminal failure; task → failed.
     DISPATCH_FAILED = auto()
+    # File-overlap gate: planned files touch an open PR; task stays planned.
+    # Stamped with overlapping PR numbers and files in the payload.
+    DISPATCH_DEFERRED = auto()
 
     # --- pr_watcher ---------------------------------------------------------
     # First time the PR's number is stamped onto a task row.
