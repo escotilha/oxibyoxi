@@ -14,22 +14,24 @@ The roadmap is auto-pruned weekly by `.github/workflows/roadmap-prune.yml` — i
 
 ---
 
+Every item below has a PR open and auto-merge enabled. The weekly auto-prune workflow removes each line once its T-id appears in a substantive merged commit on `main`.
+
 ## Tier 2
 
 **T2-12 · mypy strict typing pass**
-_add mypy to dev deps + CI job. Start with oxi-core/src/oxi_core/v3/ (the engine core), then expand. strict=True aspirationally; disable_error_code list for acknowledged gaps. Catches a class of bugs tests miss — silent None returns, wrong Protocol conformance, dataclass field types._
+_PR [#95](https://github.com/escotilha/oxi/pull/95) (initial allow-list: adapter, db, v3.notification) + PR [#99](https://github.com/escotilha/oxi/pull/99) (6-module ratchet expansion) — auto-merge queued, awaiting CI._
 
-**T2-13 · coverage gate: 80% on new code**
-_add coverage.py + pytest-cov to CI. Fail the build if a PR introduces new lines under 80% coverage. Keeps the engine from writing untested code via dogfood._
+**T2-13 · coverage gate: 85% global**
+_PR [#98](https://github.com/escotilha/oxi/pull/98) — auto-merge queued, awaiting CI. Initial floor 85% (current measured ~89%)._
 
-**T2-14 · nightly integration test against real GitHub**
-_new CI schedule that runs once a day against a dedicated sandbox repo, exercising: oxi init, pip install, real dispatch (no --real-claude, just the GitHub calls via GhCliClient), real PR open/merge/watch. Catches GitHub API drift + gh CLI breakage. Alerts operator on failure but doesn't block PRs._
+**T2-14 · nightly integration test against live GitHub**
+_PR [#105](https://github.com/escotilha/oxi/pull/105) — daily cron probes GhCliClient against the live API; read-only by design._
 
 **T2-15 · benchmark regression guard**
-_record dispatch latency, DB query p50/p95, dashboard render time on every main commit. Publish to a JSON file in the repo + flag regressions > 20%. Prevents slow creep._
+_PR [#104](https://github.com/escotilha/oxi/pull/104) — three benchmarks (db_insert, db_select, dashboard_render) tracked, fail-on-regression at 20% p95 threshold._
 
 **T2-16 · doc lint (lychee + markdownlint)**
-_CI job that checks docs/ for broken internal + external links, markdown style consistency. Protects the manual from rot as the codebase evolves underneath it._
+_PR [#103](https://github.com/escotilha/oxi/pull/103) — lychee for broken-link detection, markdownlint for style consistency on every docs/ change._
 
 ---
 
@@ -48,7 +50,7 @@ See `docs/release-notes/` for the per-version detail.
 
 ## Notes for the dogfood engine
 
-- The adapter (`oxi-adapter-self`) enforces `auto_merge=False` by default. Operator can flip to `True` once the repo allows auto-merge (currently blocked by GH Free + private repo).
+- The adapter (`oxi-adapter-self`) enforces `auto_merge=True` (flipped 2026-04-25 in [#106](https://github.com/escotilha/oxi/pull/106) once the critic + CI track record was established). Branch protection on `main` requires `lint-for-leaks` + `python 3.12` to pass before any merge — including engine PRs.
 - Budget: hard cap $20/day, $2/task Opus, $0.50/task Sonnet. Tasks that estimate beyond per-task cap get held at `queued` until operator intervention.
 - Serial dispatch — `max_concurrent=1`. No fan-out until the single-task loop is stable for two weeks.
 - Identifiers here (T0-*, T1-*, T2-*) are what the engine sees. Keep them stable — renaming invalidates handoff snapshots and ledger cross-references.
