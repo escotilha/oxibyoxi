@@ -32,6 +32,7 @@ dev = [
   "pytest>=7",
   "pytest-asyncio>=0.21",
   "pytest-timeout>=0.5",
+  "pytest-cov>=5,<6",
   "ruff>=0.5",
   "mypy>=1.10,<2",
   "types-PyYAML",
@@ -109,3 +110,31 @@ warn_return_any = true
 no_implicit_reexport = true
 strict_equality = true
 disallow_untyped_decorators = true
+
+[tool.coverage.run]
+source = ["oxi_core"]
+branch = false
+omit = [
+  # Skip the legacy v3 modules whose paths get exercised end-to-end
+  # only via real Claude dispatch — counting them would suppress the
+  # honest unit-test coverage signal. The integration paths get
+  # covered by the dogfood loop and the first-fork smoke test in CI.
+  "src/oxi_core/v3/auto_observe.py",
+  "src/oxi_core/v3/github_client.py",
+]
+
+[tool.coverage.report]
+# 85% global gate — current measured coverage is 89%. The 4-point
+# slack absorbs honest CI flakes (timing-sensitive tests, transient
+# subprocess timeouts) without letting real regressions in. Raise
+# this floor any time the measured number rises and stays there.
+fail_under = 85
+show_missing = true
+skip_covered = true
+exclude_lines = [
+  "pragma: no cover",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+  "if TYPE_CHECKING:",
+  "@overload",
+]

@@ -142,6 +142,14 @@ jobs:
       - name: Pytest (oxi-core)
         working-directory: oxi-core
         run: pytest -q
+      - name: Coverage gate (oxi-core, fail-under=85%)
+        # Re-runs the oxi-core suite under coverage instrumentation and
+        # fails CI if total coverage drops below the floor in
+        # pyproject.toml [tool.coverage.report]. Kept as a separate
+        # step so the bare pytest signal stays clean and fast in the
+        # normal path; this step is the slow, gated one.
+        working-directory: oxi-core
+        run: pytest --cov=oxi_core --cov-report=term -q
       - name: Pytest (reference adapter)
         working-directory: adapters/_reference
         run: pytest -q
