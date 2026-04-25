@@ -299,6 +299,18 @@ After following this runbook, confirm each item:
 
 The adapter package is not installed in the same Python environment as `oxi-core`. Run `which python` and `which oxi` — they must resolve to the same environment. If you are using a virtualenv, activate it before `pip install -e .`.
 
+**Alternative: use `oxi.toml`** — instead of relying on entry-point discovery you can place an `oxi.toml` file in your repo root (the directory you `cd` into before running `oxi`):
+
+```toml
+[adapter]
+class = "oxi_adapter_my_app:Adapter"
+
+[adapter.kwargs]
+repo_root = "."   # resolved relative to this file
+```
+
+This is the recommended approach for launchd/systemd units that call `oxi v3 tick` directly, because it does not depend on the Python environment's entry-point registry.
+
 ### `oxi: multiple adapters installed`
 
 Two packages declare an `oxi.adapters` entry-point. Pin the one you want:
@@ -306,6 +318,8 @@ Two packages declare an `oxi.adapters` entry-point. Pin the one you want:
 ```bash
 OXI_ADAPTER=oxi_adapter_my_app:Adapter oxi status
 ```
+
+Or add an `oxi.toml` — the TOML config is consulted before entry-point discovery and short-circuits the ambiguity.
 
 ### `roadmap not found`
 
