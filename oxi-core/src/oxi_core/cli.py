@@ -107,37 +107,51 @@ def cmd_status(args: argparse.Namespace) -> int:
             sys.stdout.write(json.dumps(payload, indent=2) + "\n")
             return 0
 
-        # Human-readable output.
+        # Human-readable output — Rich-rendered with auto-degrade on
+        # non-TTY / NO_COLOR.  Helpers in v3._render keep this function
+        # focused on data assembly.
         from .v3 import kill as kill_mod
         from .v3._glyphs import FAIL, PAUSED
+        from .v3._render import (
+            make_console,
+            render_budget_line,
+            render_recent_events,
+            render_status_counts,
+            render_status_header,
+        )
 
         ks_active = kill_mod.is_set()
         ks_path = kill_mod.path()
+        ks_reason = ks_path.read_text().strip() if ks_active else ""
 
-        print(f"oxi {__version__}")
-        print(f"  instance:  {adapter.naming().instance_name}")
-        print(f"  plan tier: {adapter.plan_tier()}")
-        print(f"  repo:      {adapter.github_repo()}")
-        if ks_active:
-            ks_reason = ks_path.read_text().strip()
-            reason_suffix = f" — {ks_reason}" if ks_reason else ""
-            # Killswitched engine → PAUSED glyph from the standard
-            # vocabulary (matches dashboard + brief).
-            print(f"  killswitch: {PAUSED} ACTIVE{reason_suffix}")
-            print(f"              {ks_path}")
-        else:
-            print("  killswitch: off")
-        print()
+        console = make_console()
+
+        # T1-19 (Rich render) + T1-21 (glyph vocabulary): the killswitch
+        # marker now flows into render_status_header, which renders it
+        # with the standard PAUSED glyph alongside the rest of the
+        # identity table.
+        render_status_header(
+            console,
+            version=__version__,
+            instance=adapter.naming().instance_name,
+            plan_tier=adapter.plan_tier(),
+            repo=adapter.github_repo(),
+            killswitch_active=ks_active,
+            killswitch_reason=ks_reason,
+            killswitch_path=str(ks_path),
+            killswitch_glyph=PAUSED,
+        )
 
         # Engine health — show at the very top if unhealthy so operators see
         # it immediately.  Healthy engines show nothing extra here.
         from .v3.engine_health import is_engine_unhealthy_from_db
         if is_engine_unhealthy_from_db(conn):
-            print(
-                f"{FAIL} ENGINE UNHEALTHY — dispatch paused after "
+            console.print(
+                f"[bold red]{FAIL} ENGINE UNHEALTHY[/] — dispatch paused "
+                "after "
                 "consecutive failures. Run `oxi v3 heal` to resume."
             )
-            print()
+            console.print()
 
         # Budget first — operators need to see hard-stop before anything else.
         # WARN keeps ⚠ (a warning marker, distinct from task-state glyphs);
@@ -149,13 +163,14 @@ def cmd_status(args: argparse.Namespace) -> int:
             budget_mod.Verdict.WARN: "⚠ ",
             budget_mod.Verdict.HARD_STOP: f"{FAIL} ",
         }[status.verdict]
-        print(
-            f"{marker}budget (today): "
-            f"${status.today_spend_usd:.2f} spent / "
-            f"${status.daily_soft_warn_usd:.2f} warn / "
-            f"${status.daily_hard_cap_usd:.2f} hard — {status.verdict.value}"
+        render_budget_line(
+            console,
+            today_spend_usd=status.today_spend_usd,
+            daily_soft_warn_usd=status.daily_soft_warn_usd,
+            daily_hard_cap_usd=status.daily_hard_cap_usd,
+            verdict=status.verdict.value,
+            marker=marker,
         )
-        print()
 
         # Status histogram.
         counts = {
@@ -164,27 +179,16 @@ def cmd_status(args: argparse.Namespace) -> int:
                 "SELECT status, COUNT(*) AS n FROM task GROUP BY status"
             )
         }
-        print("task counts by status:")
-        if counts:
-            for status_name in sorted(counts):
-                print(f"  {status_name:<12} {counts[status_name]}")
-        else:
-            print("  (no tasks)")
+        render_status_counts(console, counts)
 
         # Recent events (last 10).
-        print()
-        print("recent events:")
         events = list(
             conn.execute(
                 "SELECT created_at, kind, task_id FROM event "
                 "ORDER BY id DESC LIMIT 10"
             )
         )
-        if not events:
-            print("  (none)")
-        else:
-            for e in events:
-                print(f"  {e['created_at']}  {e['kind']:<25} task#{e['task_id']}")
+        render_recent_events(console, events)
     finally:
         handle.connection.close()
     return 0
@@ -390,8 +394,15 @@ def cmd_heal(args: argparse.Namespace) -> int:  # noqa: ARG001
 def cmd_tick(args: argparse.Namespace) -> int:
     _require_adapter()
     adapter = get_active_adapter()
+    from datetime import UTC, datetime
+
     from .v3 import kill as kill_mod
     from .v3._color import green, red, yellow
+    from .v3._render import (
+        make_console,
+        render_tick_iteration_header,
+        render_tick_summary,
+    )
     from .v3.engine_health import EngineHealth
     from .v3.engine_state import EngineState
 
@@ -402,6 +413,7 @@ def cmd_tick(args: argparse.Namespace) -> int:
         ),
     )
     health = EngineHealth()
+    console = make_console()
 
     if kill_mod.is_set():
         state.request_stop()
@@ -426,7 +438,7 @@ def cmd_tick(args: argparse.Namespace) -> int:
     try:
         total_abandoned = 0
         total_recovered = 0
-        for _ in range(args.times):
+        for iteration in range(args.times):
             if state.is_stopping():
                 break
             if health.is_unhealthy():
@@ -435,6 +447,16 @@ def cmd_tick(args: argparse.Namespace) -> int:
                     "Run `oxi v3 heal` to resume."
                 )
                 break
+            # Bracket each iteration with a visible header rule so the
+            # event log below it has a clear visual scope.  On non-TTY
+            # this degrades to a plain dashed rule with the timestamp.
+            render_tick_iteration_header(
+                console,
+                iteration=iteration + 1,
+                total=args.times,
+                timestamp=datetime.now(tz=UTC).strftime("%H:%M:%S"),
+                real_claude=args.real_claude,
+            )
             report = heartbeat.reap(handle.connection, state)
             total_abandoned += report.abandoned
             if report.abandoned or report.considered:
@@ -467,17 +489,28 @@ def cmd_tick(args: argparse.Namespace) -> int:
             if args.real_claude:
                 _run_real_claude_tick(handle.connection, state, health, adapter)
 
-        summary = (
+        # Final summary as a Rich Panel — visible terminator for the
+        # iteration log above.  Plain-text fallback under NO_COLOR /
+        # non-TTY still contains the substring "tick done" that legacy
+        # tests assert on.
+        render_tick_summary(
+            console,
+            abandoned=total_abandoned,
+            recovered=total_recovered,
+            real_claude=args.real_claude,
+        )
+        # Preserve the legacy summary line so existing capsys assertions
+        # in tests/test_cli.py continue to match on the substring
+        # "tick done." with the abandoned / auto_recovered counts.
+        legacy = (
             f"oxi: tick done. abandoned={total_abandoned} "
             f"auto_recovered={total_recovered}"
         )
-        # Color the summary line: red if anything was abandoned, green if
-        # recoveries happened with no abandonments, plain otherwise.
         if total_abandoned:
-            summary = yellow(summary)
+            legacy = yellow(legacy)
         elif total_recovered:
-            summary = green(summary)
-        print(summary)
+            legacy = green(legacy)
+        print(legacy)
     finally:
         handle.connection.close()
     return 0
