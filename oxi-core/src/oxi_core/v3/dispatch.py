@@ -503,7 +503,11 @@ async def dispatch_one(
         session_id=session_id,
         model=model_name,
         max_budget_usd=budget.per_task_opus,
-        max_turns=30,
+        # 60 turns matches the dollar cap (per_task_opus=$2) — at ~$0.03/turn
+        # observed on T1-B sweep, 30 turns burned $1 mid-implementation and
+        # workers exited before commit/push/PR. Doubling the turn ceiling
+        # gives the model headroom to finish the loop instead of starving.
+        max_turns=60,
         allowed_tools=("Bash", "Read", "Edit", "Write", "Glob", "Grep"),
         extra_env=dict(extra_env or {}),
         anthropic_api_key=anthropic_api_key,
