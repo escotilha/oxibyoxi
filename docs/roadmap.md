@@ -16,6 +16,32 @@ The roadmap is auto-pruned weekly by `.github/workflows/roadmap-prune.yml` — i
 
 Every item below has a PR open and auto-merge enabled. The weekly auto-prune workflow removes each line once its T-id appears in a substantive merged commit on `main`.
 
+## Tier 0 — operational pain from 2026-04-25 dogfood
+
+**T0-104 · file-overlap dispatch gate**
+_before each `dispatch_one()` claims a planned task, query `gh pr list --json number,headRefName,files` for currently-open PRs originating from the engine. If the planned task's expected file scope overlaps with any open PR's `files`, defer the dispatch (re-mark as planned with a `last_deferred_at` timestamp; pick a different non-overlapping task). The "expected file scope" is read from the existing `files_touched` field on `task` (per Contably's v4.1 gate pattern). Acceptance: dispatching 5 codex-series tasks (T2-31..T2-37) in parallel produces zero merge conflicts on the resulting PRs; each task waits its turn. Caused by 2026-04-25 cascade where 5 codex-series PRs all opened cleanly then conflicted at merge-time, requiring manual close+reset for 4 of them._
+
+**T0-105 · heartbeat reaper for zombie dispatches**
+_currently if a worker dies without writing back (SIGKILL, parent supervisor crash, claude-code timeout-bug #45717), the task row stays `dispatched` forever and blocks the engine's view of in-flight count. Add a heartbeat: `dispatch_one()` writes `last_progress_at` to the task row at start; a new `reaper.py` runs at the head of every tick, finds tasks with `status='dispatched' AND last_progress_at < now() - 30min` AND no live worker process matching the session_id, and resets them to `planned`. Includes a process-existence probe (psutil or `kill -0`) — never reset a task whose worker is genuinely still running. Acceptance: stale `dispatched` rows from a killed supervisor don't accumulate; queue stays accurate. 8 such zombies appeared in the 2026-04-25 PM dogfood, blocking the engine's concurrency view._
+
+## Tier 1 — operator self-host
+
+**T1-19 · adapter loader supports constructor args via TOML config**
+_today the entry-point auto-discovery can't load `SelfAdapter(repo_root=...)` because the discovered class needs no-arg construction. This forces operators to write a launcher script that imports + registers manually (e.g., `~/.oxi-tick.py`). Add `oxi.toml` (in repo root) with `[adapter]` section: `class = "oxi_adapter_self.SelfAdapter"` + `kwargs = { repo_root = "." }` (paths resolved relative to the toml location). The adapter discovery code reads this first, falls back to entry-point auto-discovery if absent. Acceptance: `oxi v3 tick --real-claude` works from a fresh shell with no launcher script; launchd plist + systemd units can call `oxi v3 tick` directly._
+
+## Tier 2 — operator polish from 2026-04-25 pain
+
+**T2-43 · CPU-aware concurrency probe**
+_RAM probe (`compute_probe.recommend_ram_concurrency()`) recommends N workers based on free RAM, but doesn't consider CPU. On 2026-04-25, the probe recommended 7 workers on a Mac mini that was already at load avg 13 from non-oxi processes (Warp, openclaw-node, etc.) — adding 7 more workers pushed load to 36+. Extend the probe to also read load avg / CPU count and compute `cpu_envelope = max(1, cpu_count - load_avg_5min)`. Final recommendation: `min(ram_envelope, cpu_envelope, plan_tier_envelope, ceiling)`. Acceptance: on a busy host, probe recommends fewer workers than RAM alone would suggest; never spawns past load capacity._
+
+**T2-44 · auto-merge enforcement on critic pass**
+_today auto-merge requires both (a) the engine arming `gh pr merge --auto` and (b) GitHub's auto-merge feature being enabled at repo level. Several PRs today required manual `gh pr merge` because step (a) was missed during PR creation. Make critic.py the single point of arming: when the critic returns APPROVE, the same code path that records the verdict also calls `gh pr merge --auto --squash --delete-branch` via `GhCliClient`. Idempotent — already-armed PRs no-op cleanly. Acceptance: every critic-approved PR has auto-merge armed without operator intervention; verified by querying `pull_requests.auto_merge` field on next tick._
+
+**T2-45 · `oxi v3 saturate` continuous-dispatch CLI command**
+_today the supervisor pattern is a bash script (`~/.oxi-supervisor.sh`) running in tmux. Make it a first-class oxi subcommand: `oxi v3 saturate --concurrency N --max-cost-per-day USD`. Loops continuously: each iteration calls ingest → auto_observe → seed → dispatch_loop. Tracks daily cost and exits cleanly when the hard cap is hit (logs a `daily_budget_reached` event). Daemon-ready: writes a PID file at `adapter.paths().repo_root + ".oxi/saturate.pid"`; refuses to start if a live PID exists; signal-safe shutdown on SIGTERM (waits for in-flight workers, doesn't kill them). Acceptance: replaces the bash supervisor entirely; can be wrapped by launchd/systemd/tmux with no shim. 10 hours of validated continuous-dispatch on 2026-04-25 makes this the next abstraction to formalize._
+
+---
+
 ## Tier 2
 
 **T2-12 · mypy strict typing pass**
