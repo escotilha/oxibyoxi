@@ -358,6 +358,10 @@ def _record_outcome(
     }
     if result.trailing_line:
         payload["trailing_line"] = result.trailing_line[:500]
+    # Surface rate-limit exhaustion in the ledger so _pick_model can
+    # walk the model fallback chain on the next dispatch of this task.
+    if getattr(result, "rate_limit_exhausted", False):
+        payload["rate_limit_exhausted"] = True
 
     failure_reason = None
     if new_status in ("failed", "abandoned"):
@@ -487,7 +491,11 @@ async def dispatch_one(
     if escalation and escalation.model:
         model_name = escalation.model
     else:
-        model_name = _pick_model(adapter)
+        # Walk the model fallback chain based on prior rate-limit
+        # exhaustion for this task. First dispatch starts at the
+        # preferred model; each rate-limit strike bumps one rung down.
+        rate_limit_strikes = _count_recent_rate_limit_failures(conn, task.id)
+        model_name = _pick_model(adapter, fallback_steps=rate_limit_strikes)
 
     invocation = DispatchInvocation(
         prompt=prompt,
@@ -605,19 +613,77 @@ async def dispatch_loop(
 # ---------------------------------------------------------------------------
 
 
-def _pick_model(adapter: Adapter) -> str:
+#: Per-tier model fallback chain. First entry is the preferred model;
+#: subsequent entries are tried when prior dispatches hit rate-limit
+#: exhaustion. Ordered cheapest-fallback-last so we never silently
+#: downgrade quality without operator visibility (the fallback is
+#: surfaced in ledger events).
+_MODEL_CHAIN_OPUS_FIRST: tuple[str, ...] = (
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+)
+
+_MODEL_CHAIN_SONNET_FIRST: tuple[str, ...] = (
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+)
+
+
+def _pick_model(adapter: Adapter, *, fallback_steps: int = 0) -> str:
     """Return the model name to use for a dispatch.
 
-    For now, a placeholder that returns a reasonable Claude model ID.
-    Future: read from ``adapter.policy().skill_weights`` or a dedicated
-    ``adapter.default_model()`` method.
+    Arguments:
+        adapter: active adapter; plan_tier() picks the chain.
+        fallback_steps: count of recent rate-limit-exhausted dispatches
+            for the same task. Each step bumps one rung down the chain
+            (Opus → Sonnet → Haiku, or Sonnet → Haiku). Out-of-bounds
+            values clamp at the cheapest model in the chain.
+
+    The chain is tier-specific:
+      max-plan operators start at Opus and fall through Sonnet → Haiku;
+      standard-plan operators start at Sonnet and fall to Haiku.
     """
     tier = adapter.plan_tier()
-    # Conservative: always use Sonnet unless explicitly configured.
-    # Max tiers use Opus; standard tier defaults to Sonnet.
     if "opus" in tier.lower() or "max" in tier.lower():
-        return "claude-opus-4-7"
-    return "claude-sonnet-4-6"
+        chain = _MODEL_CHAIN_OPUS_FIRST
+    else:
+        chain = _MODEL_CHAIN_SONNET_FIRST
+
+    idx = max(0, min(fallback_steps, len(chain) - 1))
+    return chain[idx]
+
+
+def _count_recent_rate_limit_failures(
+    conn: sqlite3.Connection, task_id: int, *, window_hours: int = 6
+) -> int:
+    """Count dispatch_retryable events with rate_limit_exhausted=True.
+
+    Used by the dispatcher to decide how far to walk the model fallback
+    chain. The window keeps stale rate-limit state from holding a task
+    on Haiku forever — a 3 AM rate-limit on Sonnet shouldn't keep the
+    task on Haiku at 9 AM.
+    """
+    rows = conn.execute(
+        "SELECT payload FROM event WHERE task_id = ? "
+        "AND kind = 'dispatch_retryable' "
+        "AND created_at > datetime('now', ?) "
+        "ORDER BY id DESC",
+        (task_id, f"-{window_hours} hours"),
+    ).fetchall()
+
+    count = 0
+    for row in rows:
+        try:
+            payload = json.loads(row[0] or "{}")
+        except (TypeError, ValueError):
+            continue
+        # Only count retryables flagged by classify() as rate-limit
+        # exhaustion. Other transients (SIGTERM, infra hiccup) don't
+        # warrant a model change.
+        if payload.get("rate_limit_exhausted"):
+            count += 1
+    return count
 
 
 __all__ = [

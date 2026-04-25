@@ -162,6 +162,11 @@ class DispatchResult:
     stderr_text: str = ""
     cost_usd: float = 0.0
     wall_clock_seconds: float = 0.0
+    #: True when classification is RETRYABLE_TRANSIENT specifically because
+    #: the worker exhausted Claude's rate-limit retry loop. Lets the
+    #: dispatcher walk the model fallback chain on retry instead of
+    #: blindly trying the same model that just got rate-limited.
+    rate_limit_exhausted: bool = False
 
     def result_event(self) -> dict | None:
         """Return the first stream-json event with type='result', or None."""
@@ -448,10 +453,12 @@ async def invoke(invocation: DispatchInvocation) -> DispatchResult:
         classification = Classification.FAILED
 
     # Retryable also applies when the rate-limit retry loop exhausted.
+    rate_limit_exhausted = False
     if classification == Classification.FAILED and _has_rate_limit_exhaustion(
         events, stderr_text
     ):
         classification = Classification.RETRYABLE_TRANSIENT
+        rate_limit_exhausted = True
 
     cost_usd = 0.0
     for evt in events:
@@ -468,6 +475,7 @@ async def invoke(invocation: DispatchInvocation) -> DispatchResult:
         stderr_text=stderr_text,
         cost_usd=cost_usd,
         wall_clock_seconds=elapsed,
+        rate_limit_exhausted=rate_limit_exhausted,
     )
 
 
