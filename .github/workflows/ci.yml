@@ -200,7 +200,7 @@ jobs:
 
   codeql:
     name: CodeQL (Python taint analysis)
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     # Security review:
     #   - No ${{ github.event.* }} interpolation in this job.
     #   - Static action invocations only; no dynamic command construction.
