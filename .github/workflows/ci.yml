@@ -1,17 +1,37 @@
 # CI workflow for oxi.
 #
+# Runner strategy:
+#   - Default to GitHub-hosted ubuntu-latest. Public OSS repos get
+#     unlimited concurrent free runners (no third-party gate, no
+#     verification queue). When a faster-runner provider is wired up
+#     (Blacksmith, Ubicloud, Depot…) flip the default by editing the
+#     fallback string here, or by setting the repo Variable OXI_RUNNER
+#     to the new label.
+#   - The OXI_RUNNER repo-scoped Variable overrides every job uniformly.
+#     Set it to "oxi-vps" to route to the self-hosted runner (label
+#     advertised by the VPS), or to a Blacksmith / Ubicloud label
+#     once that vendor is verified.
+#   - Every job — including CodeQL — runs on the same expression so
+#     the override flips the entire workflow uniformly. CodeQL is
+#     already continue-on-error so a runner-side hiccup can't block
+#     PRs.
+#
 # Security review notes (per GitHub Actions injection guidance):
-#   - No ${{ github.event.* }} interpolation anywhere in run: blocks.
+#   - No github.event.* interpolation anywhere in run: blocks.
 #   - No user-controlled inputs (issue titles, PR bodies, commit messages,
 #     branch refs) are passed to shell commands.
 #   - permissions is set to contents: read (no write, no packages, no id-token).
 #   - All run: commands execute static scripts or package managers against
 #     checked-out code. No dynamic command construction from event payloads.
-#   - No self-hosted runners.
+#   - vars.OXI_RUNNER is a repo-scoped GitHub Actions Variable, not a
+#     secret. Only the repo admin can edit Variables, and the value only
+#     flows into runs-on: — never into run: blocks or any expression that
+#     reaches the shell. This is the supported way to parameterise runner
+#     labels per the GitHub Actions docs.
 #   - Third-party actions pinned to full commit SHAs (not mutable tag refs)
 #     per OpenSSF guidance — prevents a compromised upstream actions/*
 #     namespace from silently running new code in our CI.
-#   - The only ${{ secrets.* }} reference is GITHUB_TOKEN in safely-scoped
+#   - The only secrets.* reference is GITHUB_TOKEN in safely-scoped
 #     env: / permissions: blocks (gitleaks needs pull-requests: write to
 #     annotate; CodeQL needs security-events: write to upload SARIF).
 #     Both are scoped to the individual job, not the workflow.
@@ -29,7 +49,7 @@ permissions:
 jobs:
   lint-for-leaks:
     name: lint-for-leaks (forbidden strings)
-    runs-on: [self-hosted, oxi-vps]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Run leak-lint
@@ -37,35 +57,44 @@ jobs:
 
   gitleaks:
     name: gitleaks (secret patterns)
-    runs-on: [self-hosted, oxi-vps]
-    # gitleaks-action needs pull-requests: write to annotate the PR with
-    # findings; without it the action crashes with "Resource not accessible
-    # by integration". Scoped to this job only — other jobs stay at the
-    # workflow-level contents: read.
-    permissions:
-      contents: read
-      pull-requests: write
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
+    # We invoke the gitleaks CLI directly rather than the
+    # gitleaks/gitleaks-action wrapper. Reason: the wrapper requires
+    # a paid license for any account it identifies as an organisation
+    # (which Xurman/oxi triggered after the repo transfer). The
+    # gitleaks scanner itself is open-source and unrestricted — same
+    # rules, same detection, just without the SaaS gate.
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
-      - name: Clean stale gitleaks cache (self-hosted runner)
-        # GitHub-hosted runners are ephemeral, but our self-hosted
-        # runner reuses /tmp across jobs. The gitleaks-action's tar
-        # extract aborts when /tmp/gitleaks-<version> already exists
-        # with a partial layout from a prior failed run, so we wipe
-        # those paths up-front. No-op on a fresh runner.
-        run: rm -rf /tmp/gitleaks /tmp/gitleaks.tmp /tmp/gitleaks.tar.gz /tmp/gitleaks-* || true
-      - name: Run gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
+      - name: Install gitleaks CLI
+        # Pin to a specific release tag rather than `latest` so a
+        # rule-set update doesn't change scan behaviour mid-PR. Bump
+        # GITLEAKS_VERSION on a deliberate cadence, not silently.
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
-          GITLEAKS_ENABLE_SUMMARY: "true"
+          GITLEAKS_VERSION: 8.21.2
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSL "$url" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Run gitleaks
+        # detect runs against the working tree + git history. --redact
+        # masks any matched secret in the log output. --exit-code 1
+        # makes a finding fail the job (default behaviour, made explicit).
+        run: |
+          gitleaks detect \
+            --source . \
+            --redact \
+            --exit-code 1 \
+            --verbose
 
   python:
     name: python ${{ matrix.python-version }}
-    runs-on: [self-hosted, oxi-vps]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -112,7 +141,7 @@ jobs:
 
   first-fork-smoke:
     name: first-fork smoke (wheel → oxi init → tick)
-    runs-on: [self-hosted, oxi-vps]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     # Security review:
     #   - No ${{ github.event.* }} interpolation anywhere in run: blocks.
     #   - The smoke script uses only static paths inside a mktemp workspace.
@@ -134,7 +163,7 @@ jobs:
 
   pip-audit:
     name: pip-audit (dependency CVEs)
-    runs-on: [self-hosted, oxi-vps]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Set up Python 3.12
@@ -164,7 +193,7 @@ jobs:
 
   bandit:
     name: bandit (Python SAST)
-    runs-on: [self-hosted, oxi-vps]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - name: Set up Python 3.12
@@ -200,7 +229,7 @@ jobs:
 
   codeql:
     name: CodeQL (Python taint analysis)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     # Security review:
     #   - No ${{ github.event.* }} interpolation in this job.
     #   - Static action invocations only; no dynamic command construction.

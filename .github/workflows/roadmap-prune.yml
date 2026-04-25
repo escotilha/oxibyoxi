@@ -29,7 +29,7 @@ permissions:
 jobs:
   prune:
     name: prune docs/roadmap.md and open PR
-    runs-on: [self-hosted, oxi-vps]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write
