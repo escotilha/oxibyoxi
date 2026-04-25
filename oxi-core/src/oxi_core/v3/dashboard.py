@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from ..adapter import get_active_adapter
 from . import budget as budget_mod
+from ._color import ACCENT_HEX, ACCENT_HEX_DARK
 from ._glyphs import glyph_for_status
 from ._logo import LOGO
 from .brief import generate as generate_brief
@@ -351,7 +352,12 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
 <title>{html.escape(instance)} dashboard</title>
 <style>
 body {{ font-family: system-ui, -apple-system, sans-serif; margin: 2rem; color: #222; }}
-h1 {{ margin-bottom: 0.2rem; }}
+h1 {{
+  margin-bottom: 0.2rem;
+  border-bottom: 3px solid {ACCENT_HEX};
+  display: inline-block;
+  padding-bottom: 0.2rem;
+}}
 .meta {{ color: #666; margin-bottom: 2rem; }}
 .brand-logo {{
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -423,12 +429,12 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
 .ev-details summary {{
   cursor: pointer;
   font-size: 0.75em;
-  color: #0057b8;
+  color: {ACCENT_HEX};
   user-select: none;
   list-style: none;
 }}
 .ev-details summary::-webkit-details-marker {{ display: none; }}
-.ev-details[open] summary {{ color: #003d82; }}
+.ev-details[open] summary {{ color: {ACCENT_HEX_DARK}; }}
 .ev-pane {{
   margin-top: 0.3rem;
   padding: 0.3rem 0.5rem;

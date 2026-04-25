@@ -32,6 +32,20 @@ _YELLOW = "\033[33m"
 _RED = "\033[31m"
 
 
+# ---------------------------------------------------------------------------
+# Brand accent
+# ---------------------------------------------------------------------------
+
+# Single accent color used by the dashboard and (where the renderer
+# supports it) the CLI.  Picked to evoke the "ox" / oxidation thread in
+# the project name without colliding with the semantic green/yellow/red
+# vocabulary used for status reporting.  Surfaces should reference this
+# constant rather than hardcoding the hex.
+ACCENT_HEX = "#E66A2C"
+# Darker shade for hover / active states on the same accent.
+ACCENT_HEX_DARK = "#B04E1B"
+
+
 def _colors_enabled(stream: TextIO | None = None) -> bool:
     """Return True when ANSI escape codes should be emitted.
 
@@ -69,6 +83,8 @@ def red(text: str, stream: TextIO | None = None) -> str:
 
 
 __all__ = [
+    "ACCENT_HEX",
+    "ACCENT_HEX_DARK",
     "green",
     "red",
     "yellow",
