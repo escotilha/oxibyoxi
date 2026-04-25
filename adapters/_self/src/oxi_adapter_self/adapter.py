@@ -1,7 +1,7 @@
 """SelfAdapter — oxi operating on its own repo.
 
 Conservative by design:
-  - auto_merge=False (Pierre reviews every PR)
+  - auto_merge=True (engine PRs merge after critic + CI green)
   - daily_hard_cap=$20 (runaway loop halts)
   - max_concurrent=1 (no fan-out)
   - plan_tier="20x" (Max plan, see memory:tech-insight-psos-plan-tier-20x)
@@ -112,6 +112,10 @@ class SelfAdapter:
     def policy(self) -> DispatchPolicy:
         return DispatchPolicy(
             skill_weights={},
-            auto_merge=False,
+            # Auto-merge engine PRs after the critic passes. Flipped
+            # 2026-04-25 per Pierre's "auto-merge what we originate"
+            # directive after the engine had a clean PR-merge track
+            # record across 90+ dogfood dispatches.
+            auto_merge=True,
             tier_zero_absorb=True,
         )

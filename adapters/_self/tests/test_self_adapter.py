@@ -95,12 +95,13 @@ def test_plan_tier_is_20x(tmp_path: Path):
     assert SelfAdapter(repo_root=tmp_path).plan_tier() == "20x"
 
 
-def test_auto_merge_is_off(tmp_path: Path):
-    """Critical guardrail: Pierre reviews every dogfood PR until the
-    critic track record is established."""
+def test_auto_merge_is_on(tmp_path: Path):
+    """Engine PRs auto-merge after the critic passes. Flipped 2026-04-25
+    once the critic + CI track record was established across 90+ dogfood
+    dispatches."""
     p = SelfAdapter(repo_root=tmp_path).policy()
     assert isinstance(p, DispatchPolicy)
-    assert p.auto_merge is False
+    assert p.auto_merge is True
 
 
 def test_promote_recipe_is_none(tmp_path: Path):

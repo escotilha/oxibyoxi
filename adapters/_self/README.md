@@ -17,7 +17,7 @@ After shipping `0.1.0a2`, the next integration test is `oxi` dispatching `claude
 | `per_task_sonnet` | $0.50 | Per-task ceiling for Sonnet sessions. |
 | `github_repo` | `escotilha/oxi` | The repo oxi dispatches against. |
 | `roadmap_location` | `docs/roadmap.md` | Where the dogfood polish items live. |
-| `auto_merge` | `False` | Every PR requires Pierre's approval for now. Flip only after critic track record is established. |
+| `auto_merge` | `True` | Engine PRs auto-merge after the critic passes (flipped 2026-04-25 after 90+ clean dogfood dispatches established the track record). |
 | `plan_tier` | `20x` | Pierre's Max 20x plan. |
 | `dispatch_host` | `local`, `max_concurrent=1` | Serial dispatch on the Mac Mini. No fan-out yet. |
 
