@@ -144,6 +144,11 @@ class LedgerEvent(StrEnum):
     OAUTH_WATCH_EXPIRED = auto()
     OAUTH_WATCH_UNKNOWN = auto()
 
+    # --- github_source ------------------------------------------------------
+    # A single org release feed or topic query raised an exception; other
+    # sources continue.  Payload: {source_kind, source_name, error}.
+    AUTO_IMPROVE_SOURCE_FAILED = auto()
+
 
 # ---------------------------------------------------------------------------
 # Convenience helpers for dynamically-composed kinds
