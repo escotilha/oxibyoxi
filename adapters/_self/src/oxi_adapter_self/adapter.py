@@ -67,10 +67,17 @@ class SelfAdapter:
         # parallel dispatch + auto_merge + 22-item plan ingest landed.
         # The soft-warn at $25 lets the dashboard flag pressure before
         # the hard-stop kicks in.
+        #
+        # per_task_opus raised 2.0 → 20.0 on 2026-04-25 after T1-B9
+        # validation showed Opus 4.7 hits the $2 cap mid-implementation
+        # on substantive auto-improve tasks, killing the worker before
+        # commit/push/PR. $20 keeps the daily $100 cap as the real
+        # envelope (5 max dispatches per day at the ceiling, far more
+        # at typical $1-3 spend).
         return BudgetCaps(
             daily_soft_warn=25.0,
             daily_hard_cap=100.0,
-            per_task_opus=2.0,
+            per_task_opus=20.0,
             per_task_sonnet=0.50,
         )
 

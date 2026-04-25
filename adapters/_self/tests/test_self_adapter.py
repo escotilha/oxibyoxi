@@ -54,10 +54,12 @@ def test_paths_under_repo_root(tmp_path: Path):
 
 
 def test_budget_matches_pierre_hard_cap(tmp_path: Path):
-    """Pierre's explicit caps: soft=$25, hard=$100, opus=$2, sonnet=$0.50.
+    """Pierre's explicit caps: soft=$25, hard=$100, opus=$20, sonnet=$0.50.
 
     Hard-cap raised from $20 to $100 on 2026-04-25 once parallel
-    dispatch + auto_merge + 22-item plan ingest landed. Any change to
+    dispatch + auto_merge + 22-item plan ingest landed. per_task_opus
+    raised 2.0 → 20.0 on 2026-04-25 PM after T1-B9 validation showed
+    Opus 4.7 hitting the $2 cap mid-implementation. Any change to
     these numbers should be intentional and paired with a conversation
     with Pierre — not edited casually.
     """
@@ -65,7 +67,7 @@ def test_budget_matches_pierre_hard_cap(tmp_path: Path):
     assert isinstance(b, BudgetCaps)
     assert b.daily_soft_warn == 25.0
     assert b.daily_hard_cap == 100.0
-    assert b.per_task_opus == 2.0
+    assert b.per_task_opus == 20.0
     assert b.per_task_sonnet == 0.50
 
 
