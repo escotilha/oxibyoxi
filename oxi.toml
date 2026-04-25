@@ -1,0 +1,23 @@
+# oxi.toml — adapter configuration for the oxi dogfood instance.
+#
+# The adapter loader reads this file before falling back to entry-point
+# discovery, so `oxi v3 tick` works from a fresh shell with no launcher
+# script.  launchd / systemd units can invoke `oxi v3 tick` directly
+# as long as they `cd` into the repo root first (or set the working
+# directory to it), because `oxi.toml` is looked up in the CWD.
+#
+# Resolution order in oxi_core.adapter.load_adapter():
+#   1. Already registered (register_adapter() call)
+#   2. OXI_ADAPTER env var
+#   3. This file            ← adds kwargs support (T1-19)
+#   4. Entry-point discovery
+
+[adapter]
+# Fully-qualified class in module:ClassName form.
+class = "oxi_adapter_self:SelfAdapter"
+
+# Constructor keyword arguments.  String values whose key ends with
+# "_root", "_path", or "_dir" are resolved as paths relative to this
+# file's directory (the repo root).
+[adapter.kwargs]
+repo_root = "."
