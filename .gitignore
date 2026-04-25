@@ -39,3 +39,6 @@ env/
 htmlcov/
 .venv/
 site/
+
+# Lychee link-check cache (CI uses actions/cache; local runs write here)
+.lycheecache/

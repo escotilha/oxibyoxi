@@ -68,6 +68,7 @@ nav:
       - Dashboard: manual/dashboard.md
       - Safety rails: manual/safety-rails.md
       - Dogfood loop: manual/dogfood-loop.md
+      - Doc lint: manual/doc-lint.md
       - Rollback: manual/rollback.md
       - Troubleshooting: manual/troubleshooting.md
   - Reference:

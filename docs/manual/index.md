@@ -37,5 +37,6 @@ Solo engineers and small teams who want to ship roadmap items faster by having C
 - [**Budget caps**](budget-caps.md) — daily limits and per-task ceilings
 - [**Safety rails**](safety-rails.md) — auto_merge discipline, path isolation, env whitelist, SQL safety
 - [**Dogfood loop**](dogfood-loop.md) — using oxi to ship oxi
+- [**Doc lint**](doc-lint.md) — lychee + markdownlint: broken-link detection and style enforcement
 - [**Rollback**](rollback.md) — stopping and reverting
 - [**Troubleshooting**](troubleshooting.md) — common failure modes
