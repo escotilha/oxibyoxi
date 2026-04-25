@@ -49,6 +49,13 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           fetch-depth: 0
+      - name: Clean stale gitleaks cache (self-hosted runner)
+        # GitHub-hosted runners are ephemeral, but our self-hosted
+        # runner reuses /tmp across jobs. The gitleaks-action's tar
+        # extract aborts when /tmp/gitleaks-<version> already exists
+        # with a partial layout from a prior failed run, so we wipe
+        # those paths up-front. No-op on a fresh runner.
+        run: rm -rf /tmp/gitleaks /tmp/gitleaks.tmp /tmp/gitleaks.tar.gz /tmp/gitleaks-* || true
       - name: Run gitleaks
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2.3.9
         env:
