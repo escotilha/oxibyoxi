@@ -1,6 +1,8 @@
 # Contributing to oxi
 
-oxi is in limited-invite alpha. External contributions are not yet open — this document describes the conventions in place so invited collaborators know the shape of the project, and so that when the repo opens, the contribution path is already documented.
+oxi is **public** and in **beta** (`0.1.0b1` on PyPI as of 2026-04-25). External contributions are welcome — this document describes the conventions to follow so your PR has the best chance of landing without churn.
+
+The project went public after the engine dogfooded itself end-to-end (59 PRs merged in one day, $20.15 of dispatch spend, every safety rail proven in production). The 0.1.0b\* line commits to no breaking changes within minor; 0.2.0+ may break the adapter Protocol — check release notes before pinning.
 
 ## Before contributing
 
@@ -62,7 +64,7 @@ If your adapter exposes a pattern that would benefit other forks (e.g. a reusabl
 
 ## Security disclosure
 
-**Do not open a public issue for security vulnerabilities.** See `SECURITY.md` for the disclosure process. In the limited-invite phase, reach the maintainer directly (Pierre Schurmann) rather than via GitHub Security Advisory.
+**Do not open a public issue for security vulnerabilities.** See `SECURITY.md` for the full disclosure process — the preferred channel is a private GitHub Security Advisory on this repo. Direct contact with the maintainer is also fine for time-sensitive reports.
 
 ## Dogfood-first
 
@@ -84,6 +86,16 @@ oxi builds itself. If you're adding a capability, first check whether the engine
 - Backwards-compatibility shims for unreleased features
 - "Improvements" to adjacent code outside the PR's scope
 
+## First-time contributor checklist
+
+- [ ] You've read `docs/manual/`, `SECURITY.md`, and `docs/anti-patterns.md`.
+- [ ] Your branch is off `origin/main` after `git fetch origin`.
+- [ ] Branch name follows `<type>/<session-tag>-<short-topic>`.
+- [ ] PR title is `<type>(<scope>): <imperative summary>`.
+- [ ] Tests pass locally — `ruff check .` is clean.
+- [ ] `scripts/lint-for-leaks.sh` passes.
+- [ ] If touching the engine state machine, you've checked `docs/anti-patterns.md` for prior art on what _not_ to do.
+
 ## Questions
 
-If you're an invited collaborator and something is unclear, reach out directly rather than guessing. oxi is small enough that sync clarification is faster than a speculative PR.
+oxi is small enough that asking is faster than guessing. Open a Discussion for design questions; open an issue for bugs or feature requests; reach the maintainer directly for anything time-sensitive. Discussions and issues are both public — no invite required.

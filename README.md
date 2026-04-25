@@ -7,7 +7,7 @@ oxi turns `roadmap.md` into shipped code. Each tick: it picks the next planned t
 You write a ~70-line adapter that tells oxi about your project (repo, budget, plan tier). Core has zero strings naming any specific project. Forking is `pip install --pre oxi-core && oxi init`.
 
 ```bash
-pip install --pre oxi-core      # alpha — --pre is required
+pip install --pre oxi-core      # beta — --pre still required while on 0.1.0b*
 cd my-project
 oxi init                        # 8-prompt wizard scaffolds your adapter
 cd oxi-adapter-myproject && pip install -e .
@@ -178,7 +178,7 @@ MIT at `1.0`. Everything here is safe to fork, modify, redistribute.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for branch conventions, PR format, the dogfood-first rule, and how to author your own adapter. Issue templates at [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) walk you through bug reports (with a ledger-dump snippet) and feature requests.
 
-Limited-invite phase right now; external PRs reviewed best-effort. Public flip is gated on the [public-flip checklist](docs/public-flip-checklist.md).
+Public and in beta — external PRs welcome. The [public-flip checklist](docs/public-flip-checklist.md) records the gates the project crossed before going public; it's now a historical artefact rather than an open task list.
 
 ## Anti-patterns
 
