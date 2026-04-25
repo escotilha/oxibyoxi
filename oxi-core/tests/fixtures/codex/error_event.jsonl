@@ -1,0 +1,2 @@
+{"type": "turn.started", "turn_id": "turn-002", "session_id": "sess-def"}
+{"type": "error", "turn_id": "turn-002", "session_id": "sess-def", "code": "context_length_exceeded", "message": "The input exceeds the model's context length."}

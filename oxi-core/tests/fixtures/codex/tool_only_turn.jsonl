@@ -1,0 +1,4 @@
+{"type": "turn.started", "turn_id": "turn-001", "session_id": "sess-jkl"}
+{"type": "tool.call.started", "turn_id": "turn-001", "session_id": "sess-jkl", "call_id": "call-001", "tool": "shell", "input": {"command": "git status"}}
+{"type": "tool.call.completed", "turn_id": "turn-001", "session_id": "sess-jkl", "call_id": "call-001", "tool": "shell", "output": {"stdout": "nothing to commit\n", "exit_code": 0}}
+{"type": "turn.completed", "turn_id": "turn-001", "session_id": "sess-jkl", "usage": {"input_tokens": 50, "output_tokens": 20}, "total_cost_usd": 0.001}

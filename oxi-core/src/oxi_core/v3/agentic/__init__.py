@@ -7,12 +7,15 @@ protocol.  The protocol is the stable contract; callers depend only on
 
 Public surface
 --------------
-- ``AgenticAdapter``   — Protocol all adapters implement.
-- ``CodexCliAdapter``  — Wraps the ``codex exec --json`` CLI.
-- ``CodexFormatDriftError`` — Raised when the running binary's output
+- ``AgenticAdapter``       — Protocol all adapters implement.
+- ``CodexCliAdapter``      — Wraps the ``codex exec --json`` CLI.
+- ``CodexFormatDriftError``— Raised when the running binary's output
   format diverges from the known-good JSONL fixture.
+- ``codex_events``         — Pure functions for parsing and normalising
+  the ``codex --json`` JSONL event stream.
 """
 
+from . import codex_events
 from .base import AgenticAdapter
 from .codex import CodexCliAdapter, CodexFormatDriftError
 
@@ -20,4 +23,5 @@ __all__ = [
     "AgenticAdapter",
     "CodexCliAdapter",
     "CodexFormatDriftError",
+    "codex_events",
 ]

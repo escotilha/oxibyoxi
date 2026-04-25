@@ -1,0 +1,10 @@
+{"type": "turn.started", "turn_id": "turn-001", "session_id": "sess-ghi"}
+{"type": "item.completed", "turn_id": "turn-001", "session_id": "sess-ghi", "item": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "Analyzing the problem."}]}}
+{"type": "tool.call.started", "turn_id": "turn-001", "session_id": "sess-ghi", "call_id": "call-001", "tool": "shell", "input": {"command": "cat README.md"}}
+{"type": "tool.call.completed", "turn_id": "turn-001", "session_id": "sess-ghi", "call_id": "call-001", "tool": "shell", "output": {"stdout": "# Project\n", "exit_code": 0}}
+{"type": "turn.completed", "turn_id": "turn-001", "session_id": "sess-ghi", "usage": {"input_tokens": 80, "output_tokens": 30}, "total_cost_usd": 0.001}
+{"type": "turn.started", "turn_id": "turn-002", "session_id": "sess-ghi"}
+{"type": "tool.call.started", "turn_id": "turn-002", "session_id": "sess-ghi", "call_id": "call-002", "tool": "shell", "input": {"command": "pytest"}}
+{"type": "tool.call.completed", "turn_id": "turn-002", "session_id": "sess-ghi", "call_id": "call-002", "tool": "shell", "output": {"stdout": "5 passed\n", "exit_code": 0}}
+{"type": "item.completed", "turn_id": "turn-002", "session_id": "sess-ghi", "item": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "All tests pass."}]}}
+{"type": "turn.completed", "turn_id": "turn-002", "session_id": "sess-ghi", "usage": {"input_tokens": 120, "output_tokens": 60}, "total_cost_usd": 0.004}

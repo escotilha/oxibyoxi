@@ -1,0 +1,6 @@
+{"type": "turn.started", "turn_id": "turn-001", "session_id": "sess-abc"}
+{"type": "item.completed", "turn_id": "turn-001", "session_id": "sess-abc", "item": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "I will implement the feature."}]}}
+{"type": "tool.call.started", "turn_id": "turn-001", "session_id": "sess-abc", "call_id": "call-001", "tool": "shell", "input": {"command": "ls -la"}}
+{"type": "tool.call.completed", "turn_id": "turn-001", "session_id": "sess-abc", "call_id": "call-001", "tool": "shell", "output": {"stdout": "total 0\n", "exit_code": 0}}
+{"type": "item.completed", "turn_id": "turn-001", "session_id": "sess-abc", "item": {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "Done. Files listed successfully."}]}}
+{"type": "turn.completed", "turn_id": "turn-001", "session_id": "sess-abc", "usage": {"input_tokens": 100, "output_tokens": 50}, "total_cost_usd": 0.003}
