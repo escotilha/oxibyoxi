@@ -16,9 +16,14 @@ retry_wait_time = 2
 cache = true
 max_cache_age = "7d"
 
-# Verify internal anchors (e.g. ../foo.md#section) — this is the
-# whole reason we bother with a link checker.
-include_fragments = true
+# Don't verify internal markdown anchors. Lychee's slugifier diverges
+# from mkdocs's (em-dashes and other unicode chars produce different
+# slugs), so an anchor like #step-5-write-your-roadmap that mkdocs
+# resolves cleanly fails lychee with "Cannot find fragment". The
+# mkdocs site build runs --strict in docs.yml and catches genuinely
+# broken anchors during the actual render. Let lychee own URL
+# resolution + missing-file checks; mkdocs owns anchor validation.
+include_fragments = false
 
 # Trim noise. These domains rate-limit aggressively or return 4xx
 # to bots while serving humans fine; treat their links as opaque.
@@ -31,6 +36,10 @@ exclude = [
   "^https?://localhost",
   "^https?://0\\.0\\.0\\.0",
   "^https?://(100\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.)",
+  # Placeholder asset slot — README references the screenshot before
+  # it's been captured. docs/assets/README.md documents this is
+  # intentional; the broken-image icon flags the pending screenshot.
+  "oxi-tick-screenshot\\.png",
 ]
 
 # Don't fail on transient infrastructure issues. 429 (rate-limit),

@@ -6,7 +6,7 @@ This file documents the internal layout of `oxi-core`. The 5-minute summary is i
 
 ## Layout
 
-```
+```text
 oxi-core/                        # ships as `oxi-core` on PyPI
 ├── src/oxi_core/
 │   ├── adapter.py              # 10-method Protocol every fork implements

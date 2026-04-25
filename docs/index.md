@@ -25,7 +25,7 @@ Beta (`0.1.0b1` on PyPI). The engine built most of itself today via dogfood — 
 
 ## What it does
 
-```
+```text
 ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
 │  roadmap │→→→│  planner │→→→│ dispatch │→→→│pr_watcher│→→→│auto_merge│
 │   .md    │   │          │   │ claude -p│   │          │   │  critic  │

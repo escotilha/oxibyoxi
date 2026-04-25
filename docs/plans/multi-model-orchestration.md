@@ -39,7 +39,7 @@ These are non-negotiable. Every roadmap entry below honors them.
 
 Each entry below is shaped for the oxi roadmap parser:
 
-```
+```text
 **T<tier>-<n> · <title>**
 _<italic subtitle>_
 ```
@@ -361,7 +361,7 @@ Adapters declare the codex binary version they expect. `oxi-adapter-self` return
 
 The single PR that lands this work appends the 11 items below to `docs/roadmap.md` (T2-30 through T2-40). Each item is a strict-grammar block:
 
-```
+```text
 **T2-30 · agentic adapter protocol + ClaudeCodeAdapter shim**
 _introduce oxi_core/v3/agentic/__init__.py defining the AgenticAdapter Protocol over the existing dispatch_invoke.invoke() contract; ship ClaudeCodeAdapter as a pure passthrough. ..._
 ```

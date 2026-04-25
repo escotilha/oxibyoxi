@@ -14,7 +14,7 @@ A new module `oxi_core.v3.auto_external` runs once a day (Anthropic Claude Code 
 
 ### Pipeline at a glance
 
-```
+```text
 sources (GitHub releases, GitHub topic queries, AI newsletters, optional X)
    │
    ▼
@@ -137,36 +137,47 @@ Each entry is one PR. Each ships through the existing critic + `auto_merge=False
 **B1 ship-blocker:** B1 must include the full lint gate (forbidden-imports of `dispatch`, `dispatch_invoke`, `dispatch_pool`, `auto_merge`). No subsequent PR can pass CI without it.
 
 ### B1 · `auto_external` skeleton + adapter Protocol method + CLI subcommand stubs
+
 _create the empty package; add `Adapter.auto_improve_config()`; add `AutoExternalConfig` dataclass; stub `oxi v3 auto-improve {scan,unpause,status}` subcommands that print "not implemented" and exit 0; add the `LedgerEvent` constants from §2; extend `scripts/lint-for-leaks.sh` with the forbidden-imports gate. All fakes/fixtures land here so subsequent PRs are tiny._
 
 ### B2 · GitHub source fetcher
+
 _implements `GitHubSource` against pinned-org release feeds (8) and topic queries (5). Star-velocity prefilter: drop repos < 5 stars/day in the last 30 days. Commit-activity prefilter: drop repos with no commits in the last 14 days. Reuses `oxi_core.v3.github_client.GitHubClient` Protocol; tests use `FakeGitHubClient` from `tests/fixtures/fake_github.py`. Per-source try/except — failure emits `AUTO_IMPROVE_SOURCE_FAILED` and other sources continue._
 
 ### B3 · Newsletter source fetcher
+
 _implements `NewsletterSource` against AlphaSignal, Latent Space, BensBites public archives. HTML scrape via `httpx` + `selectolax` (already a dep via `pr_watcher`? — confirm). Per-source try/except. New `FakeHTTPFetcher` in `tests/fixtures/fake_http.py` returns canned HTML fixtures from `tests/fixtures/data/newsletters/`. Each newsletter gets its own parser function so a layout change to one doesn't take down all three._
 
 ### B4 · X source fetcher (via X skill)
+
 _implements `XSource` as a subprocess wrapper around the operator's X skill (per Q1). Reads ~15-account curated list from `AutoExternalConfig.x_account_list`; calls `config.x_skill_binary` with the list and a since-timestamp; parses the skill's stdout as a list of post records. Disabled when `config.x_skill_binary is None` — returns `[]` without subprocess call (asserted in test). New `FakeXSkill` fixture writes canned stdout. If subprocess returns non-zero or stdout fails to parse → `AUTO_IMPROVE_SOURCE_FAILED` with the exit code in payload, no retry within the same scan. Acceptance: when binary is `None`, no subprocess; when binary is set, subprocess runs with the configured arg shape; parse failures emit the right ledger event._
 
 ### B5 · Ranking pipeline (no LLM yet)
+
 _implements `prefilter`, `bm25_score`, `vector_rerank`, `rrf_combine` in `ranking.py`. SQLite FTS5 virtual table built on the fly from roadmap.md + CHANGELOG.md + last-90-day merged PRs (queried via `GitHubClient.list_merged_prs(since=now-90d)`). sqlite-vec extension loaded; embeddings via `all-MiniLM-L6-v2` sentence-transformer (already a dep — confirm in `pyproject.toml`). RRF k=60 hardcoded (matches user's memory rule for hybrid retrieval). Tests use a fixed 50-item corpus and assert deterministic top-15 ordering._
 
 ### B6 · LLM judge with rubric + fabricated-module hard filter
+
 _implements `HaikuJudge` in `judge.py`. Reads current module list via `pkgutil.iter_modules(oxi_core.v3.__path__)`. Structured output schema: `{relevance: 1-5, concreteness: 1-5, suggested_tier: 0|1|2, duplicate: bool, fabricated_module: bool, rationale: str}`. Hard-rejects when `fabricated_module=true`, emits `EXTERNAL_PROPOSAL_REJECTED_FABRICATED`. Calls `budget.check()` before every invocation; honors internal $5/day cap (separate ledger query against today's `EXTERNAL_PROPOSAL_*` cost-tagged events). Fake judge: `FakeJudge` in `tests/fixtures/fake_judge.py` with deterministic verdicts keyed by candidate ID._
 
 ### B7 · Three-layer dedup
+
 _implements `dedup_identifier`, `dedup_semantic`, `dedup_temporal` in `dedup.py`. Identifier dedup: query `EXTERNAL_PROPOSAL_EMITTED` events for the next monotonic counter. Semantic dedup: cosine similarity ≥ 0.85 against open `front` rows + tasks updated in last 30 days. Temporal dedup: same `(signal_kind, target_identifier)` within 14 days → skip and emit `EXTERNAL_PROPOSAL_DEDUP_SKIPPED`. Tests cover each layer with fixed embeddings + ledger fixtures._
 
 ### B8 · Emit step — ledger events + Markdown digest writer
+
 _implements `emit_proposal` in `emit.py`. Writes one `EXTERNAL_PROPOSAL_EMITTED` event per accepted proposal, inserts a row into `front` with `task_id=NULL` and the chosen `T<tier>-A<n>` identifier (or stages it pending operator accept — match `auto_observe.accept()` shape exactly). Writes Markdown digest at `.oxi/auto-improve-digest-YYYY-MM-DD.md` with sections: Top proposals, Skipped (dedup), Skipped (fabricated), Source failures, Budget held. File path uses `adapter.paths().repo_root` — never hardcoded._
 
 ### B9 · `auto_improve_health` — acceptance-ratio tracker + auto-pause
+
 _implements `health.py`. On every scan, computes `accepted / emitted` over the last 14 days from ledger events. If ratio < `acceptance_ratio_threshold` (default 0.15) for two consecutive 7-day windows: emit `AUTO_IMPROVE_NOISE_ALERT`, write a `paused: true` row in a new `auto_improve_state` table (or reuse `engine_state` table — confirm in implementation), and emit `AUTO_IMPROVE_PAUSED`. Manual unpause via `oxi v3 auto-improve unpause` (CLI subcommand wired in B1; the actual unpause logic lands here). Auto-pause is **per-loop** — does not affect the engine killswitch._
 
 ### B10 · Claude Code Routine config + entry-point script
+
 _adds `scripts/auto_improve_routine.py` (the entry point Routines invokes) and `routines/auto-improve.toml` (or whatever shape the Routines schema settles on at GA). Credentials via Anthropic Managed Agent Vaults — no token in the routine config or env file. The script: opens the SQLite DB, builds `EngineState`, calls `auto_external.scan()`, exits. Idempotent: if a scan already ran today, `EXTERNAL_PROPOSAL_EMITTED` events for today exist → skip and log. Smoke test: a CI job runs the script against a fixture DB and asserts the digest file is written._
 
 ### B11 · GitHub Actions schedule fallback + watchdog (ships only if Routines GA slips)
+
 _adds `.github/workflows/auto-improve.yml` running on cron `0 5 * * *`. Calls `scripts/auto_improve_routine.py`. Watchdog: if no `EXTERNAL_PROPOSAL_EMITTED` event in the last 36h, the next run emits a `auto_improve_watchdog_stalled` event and notifies via the existing `notification.py` backend. Don't ship this unless Routines is actually delayed past B10's merge date. Track Routines GA in `docs/origin-feature-gap-2026-04-24.md` and decide at B10 acceptance time._
 
 ---
@@ -285,54 +296,73 @@ Markers: **C** = create, **E** = edit existing, **R** = rename, **T** = test (ne
 Every entry follows the same shape: a fake for any external dependency, deterministic input → deterministic output, ledger-event assertion. The integration test in B8 is the gate — once it passes, the whole pipeline is wired end-to-end with fakes.
 
 ### B1
+
 - `pytest oxi-core/tests/test_auto_external_skeleton.py` green.
+
 - `pytest oxi-core/tests/test_lint_forbidden_imports.py` green.
 - `bash scripts/lint-for-leaks.sh` exits 0.
 - `oxi v3 auto-improve scan` exits 0 and prints "not implemented".
 
 ### B2
+
 - `pytest oxi-core/tests/test_auto_external_github_source.py -v` — ≥ 4 cases (happy, low-velocity, low-activity, source-failure).
+
 - All `FakeGitHubClient` calls deterministic — no network in test path.
 - `AUTO_IMPROVE_SOURCE_FAILED` event written when fake raises.
 
 ### B3
+
 - `pytest oxi-core/tests/test_auto_external_newsletter_source.py -v` — ≥ 4 cases (each newsletter happy + one fail-gracefully).
+
 - No live HTTP — all via `FakeHTTPFetcher`.
 
 ### B4
+
 - `pytest oxi-core/tests/test_auto_external_x_source.py -v` — 3 cases (binary unset → `[]`, subprocess error, parse error).
+
 - Binary-unset path makes zero subprocess calls (asserted via `subprocess.run` monkeypatch).
 - `FakeXSkill` covers the skill's expected stdout shape; if the real skill changes shape, the test fixture is updated and B4's parser updated alongside.
 
 ### B5
+
 - `pytest oxi-core/tests/test_auto_external_ranking.py -v` — deterministic top-15 over fixed corpus; RRF formula matches expected for hand-computed case.
+
 - sqlite-vec extension loads (or skip with clear xfail if SQLite build lacks loadable-extensions).
 
 ### B6
+
 - `pytest oxi-core/tests/test_auto_external_judge.py -v` — ≥ 5 cases (rubric parse, fabricated_module reject, budget exhausted, module-list current, structured output schema).
+
 - `FakeJudge` deterministic per candidate ID.
 
 ### B7
+
 - `pytest oxi-core/tests/test_auto_external_dedup.py -v` — 3 layers × 2 cases each.
+
 - Counter monotonicity: emit 3, then 4 → counter is 4.
 
 ### B8
+
 - `pytest oxi-core/tests/test_auto_external_emit.py oxi-core/tests/test_auto_external_integration.py -v` green.
 - Integration test asserts: exactly N `EXTERNAL_PROPOSAL_EMITTED` events; exactly M `EXTERNAL_PROPOSAL_DEDUP_SKIPPED`; digest file exists at `.oxi/auto-improve-digest-<today>.md` and contains the expected sections; `front` rows are inserted with `task_id=NULL` and identifiers match `T<tier>-A<n>` regex.
 
 ### B9
+
 - `pytest oxi-core/tests/test_auto_external_health.py -v` — pause/unpause round-trip; ratio computation correct across 14d window.
 - `oxi v3 auto-improve unpause` CLI integration test green.
 
 ### B10
+
 - `pytest oxi-core/tests/test_auto_improve_routine.py -v` — smoke + idempotency.
 - Manual: invoke routine entry-point against fixture DB, confirm exit 0 and digest written.
 
 ### B11 (conditional)
+
 - Workflow YAML lints (yamllint clean).
 - `pytest oxi-core/tests/test_auto_improve_watchdog.py` green.
 
 ### Shared lint gates (every PR must pass)
+
 - `bash scripts/lint-for-leaks.sh` — confirms no `from oxi_core.v3.dispatch` / `auto_merge` imports inside `auto_external/`.
 - `ruff check`, `mypy oxi-core/src/oxi_core/v3/auto_external/` (per T2-12 scope), `pytest oxi-core/tests/`.
 
@@ -388,7 +418,7 @@ No GitHub Discussions, no tracking issues, no Slack. Single local file. The dash
 
 ### Q6 → Resolved: 8-file split inside `auto_external/`.
 
-```
+```text
 oxi-core/src/oxi_core/v3/auto_external/
 ├── __init__.py            # public entry point: run_daily()
 ├── config.py              # AutoExternalConfig dataclass

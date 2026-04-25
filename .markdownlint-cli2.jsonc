@@ -48,6 +48,29 @@
     // **bold** items as a parser-readable item header. Allow.
     "no-emphasis-as-heading": false,
 
+    // MD051 link-fragments — markdownlint's slugifier diverges from
+    // mkdocs's (em-dashes, unicode), producing false positives on
+    // anchors that mkdocs renders cleanly. mkdocs --strict in
+    // docs.yml owns anchor validation; markdownlint stays out of it.
+    "link-fragments": false,
+
+    // MD026 trailing-punctuation-in-heading — research-doc headers
+    // are often full sentences (e.g. "Q1 → Resolved: no rename.").
+    // The period reads naturally; suppressing the rule keeps lint
+    // out of prose-shape decisions.
+    "no-trailing-punctuation": false,
+
+    // MD038 no-space-in-code — research docs often quote "`foo`, "
+    // sequences inside table cells where the renderer trims spaces;
+    // the lint rule fires false positives on multi-quoted lists.
+    "no-space-in-code": false,
+
+    // MD056 table-column-count — engine-written tables sometimes
+    // include backtick-delimited paths with pipes that markdown
+    // parses as extra columns. The rendered output reads correctly
+    // (mkdocs handles it). Don't lint table shape.
+    "table-column-count": false,
+
     // MD032 blanks-around-lists — many existing docs deliberately
     // tighten lists against surrounding paragraphs for visual
     // density. Not worth a treewide reformatting pass. We may

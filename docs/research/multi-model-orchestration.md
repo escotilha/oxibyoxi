@@ -87,7 +87,7 @@ The migration is bounded: ~600 lines net new code, four new modules, no break to
 
 ## 3. Architecture (one-page diagram in text)
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────┐
 │ oxi supervisor (dispatch.py)                                        │
 │   - claims a task                                                   │
@@ -187,7 +187,7 @@ The migration is bounded: ~600 lines net new code, four new modules, no break to
 
 ### New modules
 
-```
+```text
 oxi-core/src/oxi_core/v3/
 ├── agentic/
 │   ├── __init__.py            # AgenticAdapter Protocol + factory

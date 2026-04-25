@@ -51,13 +51,13 @@ Read live from `origin/main` and `gh pr list` at 2026-04-25 13:50Z:
 
 ### Pending external (Dependabot, ignore for sequencing)
 
-#121-#125 are GitHub Actions dependency bumps. They merge or close on their own.
+PRs #121-#125 are GitHub Actions dependency bumps. They merge or close on their own.
 
 ---
 
 ## 2. Dependency graph between everything in flight + everything proposed
 
-```
+```text
                     ┌─────────────────────────────────────────────────┐
                     │ T2-12 mypy + T2-13 coverage + T2-14 live-GH +   │
                     │ T2-15 bench + T2-16 doc-lint  (#95,98,99,103,   │

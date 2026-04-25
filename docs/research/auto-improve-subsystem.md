@@ -159,7 +159,7 @@ Daily cost projection: **$0.30–$0.80/day** for the ranking phase (Haiku judge 
 
 ## 3. Architecture: Where the Daily Loop Sits
 
-```
+```text
                     ┌─────────────────────────────────────────────────┐
                     │              Anthropic Claude Code              │
                     │              Routine — daily 5am UTC            │
@@ -238,7 +238,7 @@ Daily cost projection: **$0.30–$0.80/day** for the ranking phase (Haiku judge 
 
 ## 5. Ranking Pipeline
 
-```
+```text
 SOURCES (raw fetch, ~5 min total)
   │ GitHub: 8 pinned-org release feeds + 5 topic queries
   │ Newsletters: AlphaSignal/Latent Space/BensBites public archive HTML
@@ -315,6 +315,7 @@ EMIT
 - `AUTO_IMPROVE_PAUSED` / `AUTO_IMPROVE_RESUMED`
 
 **New optional Adapter protocol method:**
+
 ```python
 def auto_improve_config(self) -> AutoImproveConfig | None:
     """Return source config for the daily auto-improve loop, or None to disable."""
