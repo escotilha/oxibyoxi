@@ -293,6 +293,10 @@ def watch(
                 {
                     "pr_number": pr.number,
                     "check_status": pr.check_status.value,
+                    # Surface auto-merge arm state so operators can verify
+                    # T2-44 enforcement: approved PRs should show True here
+                    # on the tick after auto_merge.run() arms them.
+                    "auto_merge_armed": pr.auto_merge_armed,
                 },
             )
             if pr.check_status is PRCheckStatus.FAILURE:
