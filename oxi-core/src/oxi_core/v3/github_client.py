@@ -16,6 +16,9 @@ actually needs:
 - ``list_check_runs(repo, pr_number)`` — return individual check runs
   attached to the PR's HEAD commit (used by ci_issue_filer to surface
   specific failing checks in the ledger).
+- ``list_merged_prs(repo, since)`` — return merged PRs since a given
+  ISO-8601 date string (used by the ranking corpus builder to
+  incorporate recent shipping context).
 
 Everything is sync. pr_watcher runs from a timer; latency here is
 bounded by the ``gh`` CLI's own round-trip.
@@ -82,6 +85,26 @@ class CheckRun:
     conclusion: str  # "" when not yet completed
 
 
+@dataclass(frozen=True)
+class MergedPR:
+    """A merged pull request — minimal shape for the ranking corpus.
+
+    Attributes
+    ----------
+    number:
+        GitHub PR number.
+    title:
+        PR title string.
+    merged_at:
+        ISO-8601 timestamp when the PR was merged (e.g.
+        ``"2026-04-01T12:00:00Z"``).
+    """
+
+    number: int
+    title: str
+    merged_at: str
+
+
 class GitHubClient(Protocol):
     """Minimal interface. Forks can substitute any implementation."""
 
@@ -110,6 +133,33 @@ class GitHubClient(Protocol):
         Used by ``ci_issue_filer`` to surface specific failing checks
         in the ledger.  Returns an empty tuple when no checks are
         reported or the PR does not exist.
+        """
+
+    def list_merged_prs(
+        self,
+        repo: str,
+        *,
+        since: str,
+        limit: int = 100,
+    ) -> tuple[MergedPR, ...]:
+        """Return merged PRs in ``repo`` merged on or after ``since``.
+
+        Parameters
+        ----------
+        repo:
+            GitHub repository in ``owner/name`` format.
+        since:
+            ISO-8601 date string (``"YYYY-MM-DD"`` or
+            ``"YYYY-MM-DDTHH:MM:SSZ"``).  Only PRs merged at or after
+            this timestamp are returned.
+        limit:
+            Maximum PRs to return (default 100).
+
+        Returns
+        -------
+        tuple[MergedPR, ...]
+            Merged PRs ordered newest-first.  Empty tuple when no PRs
+            match or on error.
         """
 
 
@@ -184,6 +234,48 @@ class GhCliClient:
             return True
         except GitHubError:
             return False
+
+    def list_merged_prs(
+        self,
+        repo: str,
+        *,
+        since: str,
+        limit: int = 100,
+    ) -> tuple[MergedPR, ...]:
+        """Return merged PRs merged on or after ``since``.
+
+        Shells to ``gh pr list --state merged --search 'merged:>=<since>'``.
+        Returns an empty tuple on any gh error (degraded gracefully so
+        the ranking corpus still works without network access).
+        """
+        args = [
+            self._binary, "pr", "list",
+            "--repo", repo,
+            "--state", "merged",
+            "--search", f"merged:>={since}",
+            "--json", "number,title,mergedAt",
+            "--limit", str(limit),
+        ]
+        try:
+            out = self._run(args)
+        except GitHubError:
+            return ()
+        if not out.strip():
+            return ()
+        try:
+            items = json.loads(out)
+        except json.JSONDecodeError:
+            return ()
+        prs: list[MergedPR] = []
+        for item in items:
+            prs.append(
+                MergedPR(
+                    number=int(item.get("number", 0)),
+                    title=item.get("title", ""),
+                    merged_at=item.get("mergedAt", ""),
+                )
+            )
+        return tuple(prs)
 
     def list_check_runs(self, repo: str, pr_number: int) -> tuple[CheckRun, ...]:
         """Return individual check runs for the PR's HEAD commit.
@@ -346,6 +438,7 @@ __all__ = [
     "GhCliClient",
     "GitHubClient",
     "GitHubError",
+    "MergedPR",
     "PRCheckStatus",
     "PRState",
     "PullRequest",

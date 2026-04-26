@@ -11,6 +11,7 @@ from __future__ import annotations
 from oxi_core.v3.github_client import (
     CheckRun,
     GitHubClient,
+    MergedPR,
     PRCheckStatus,
     PRState,
     PullRequest,
@@ -26,6 +27,8 @@ class FakeGitHubClient:
         self._merge_calls: list[tuple[str, int, str]] = []
         # repo → {pr_number: tuple[CheckRun, ...]}
         self._check_runs: dict[str, dict[int, tuple[CheckRun, ...]]] = {}
+        # repo → list of MergedPR (for list_merged_prs stub)
+        self._merged_prs: dict[str, list[MergedPR]] = {}
 
     # ---- Test setup helpers ------------------------------------------
 
@@ -57,6 +60,10 @@ class FakeGitHubClient:
         without touching real GitHub.
         """
         self._check_runs.setdefault(repo, {})[pr_number] = runs
+
+    def add_merged_pr(self, repo: str, pr: MergedPR) -> None:
+        """Pre-configure a merged PR for ``list_merged_prs`` to return."""
+        self._merged_prs.setdefault(repo, []).append(pr)
 
     @property
     def merge_calls(self) -> tuple[tuple[str, int, str], ...]:
@@ -91,6 +98,24 @@ class FakeGitHubClient:
     def list_check_runs(self, repo: str, pr_number: int) -> tuple[CheckRun, ...]:
         """Return pre-configured check runs, or an empty tuple if none set."""
         return self._check_runs.get(repo, {}).get(pr_number, ())
+
+    def list_merged_prs(
+        self,
+        repo: str,
+        *,
+        since: str,
+        limit: int = 100,
+    ) -> tuple[MergedPR, ...]:
+        """Return pre-configured merged PRs, filtered by ``since``.
+
+        Only PRs whose ``merged_at`` >= ``since`` are returned, ordered
+        newest-first.  The ``since`` comparison is lexicographic (ISO
+        strings sort correctly).
+        """
+        all_prs = self._merged_prs.get(repo, [])
+        filtered = [p for p in all_prs if p.merged_at >= since]
+        filtered.sort(key=lambda p: p.merged_at, reverse=True)
+        return tuple(filtered[:limit])
 
 
 # Type-check that FakeGitHubClient satisfies the protocol.
