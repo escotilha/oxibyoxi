@@ -25,6 +25,9 @@ class FakeGitHubClient:
         # repo → {pr_number: PullRequest}
         self._prs: dict[str, dict[int, PullRequest]] = {}
         self._merge_calls: list[tuple[str, int, str]] = []
+        self._enable_auto_merge_calls: list[tuple[str, int, str]] = []
+        # Controls whether enable_auto_merge succeeds (default True).
+        self.auto_merge_arm_succeeds: bool = True
         # repo → {pr_number: tuple[CheckRun, ...]}
         self._check_runs: dict[str, dict[int, tuple[CheckRun, ...]]] = {}
         # repo → list of MergedPR (for list_merged_prs stub)
@@ -70,6 +73,11 @@ class FakeGitHubClient:
         """History of merge_pr invocations for test assertions."""
         return tuple(self._merge_calls)
 
+    @property
+    def enable_auto_merge_calls(self) -> tuple[tuple[str, int, str], ...]:
+        """History of enable_auto_merge invocations for test assertions."""
+        return tuple(self._enable_auto_merge_calls)
+
     # ---- GitHubClient protocol ---------------------------------------
 
     def list_open_prs(
@@ -93,6 +101,28 @@ class FakeGitHubClient:
             return False
         # Flip to merged.
         self.set_pr_state(repo, pr_number, PRState.MERGED)
+        return True
+
+    def enable_auto_merge(
+        self, repo: str, pr_number: int, *, method: str = "squash"
+    ) -> bool:
+        """Record the arm call and return ``auto_merge_arm_succeeds``."""
+        self._enable_auto_merge_calls.append((repo, pr_number, method))
+        if not self.auto_merge_arm_succeeds:
+            return False
+        # Flip ``auto_merge_armed`` on the stored PR so callers can query it.
+        pr = self._prs.get(repo, {}).get(pr_number)
+        if pr is None:
+            return False
+        self._prs[repo][pr_number] = PullRequest(
+            number=pr.number,
+            title=pr.title,
+            head_branch=pr.head_branch,
+            state=pr.state,
+            check_status=pr.check_status,
+            mergeable=pr.mergeable,
+            auto_merge_armed=True,
+        )
         return True
 
     def list_check_runs(self, repo: str, pr_number: int) -> tuple[CheckRun, ...]:

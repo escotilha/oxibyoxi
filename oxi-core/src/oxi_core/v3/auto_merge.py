@@ -61,6 +61,13 @@ class AutoMergeReport:
         already_merged: PRs a human/other tool already merged (noop).
         critic_rejected: tasks that the critic rejected.
         merge_failed: PRs where the gh merge call returned failure.
+        auto_merge_armed: PRs where ``gh pr merge --auto`` was newly armed
+            after a critic APPROVE (GitHub will complete the merge once CI
+            passes and branch protections are satisfied).
+        auto_merge_arm_failed: PRs where the ``--auto`` arm call failed
+            (e.g. the repo hasn't enabled auto-merge at the settings level).
+            The PR is still considered approved; a direct merge is attempted
+            as a fallback.
     """
 
     considered: int
@@ -68,6 +75,8 @@ class AutoMergeReport:
     already_merged: int
     critic_rejected: int
     merge_failed: int
+    auto_merge_armed: int = 0
+    auto_merge_arm_failed: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +217,8 @@ def run(
     already_merged = 0
     critic_rejected = 0
     merge_failed = 0
+    auto_merge_armed = 0
+    auto_merge_arm_failed = 0
 
     for task in candidates:
         if task.pr_number is None:  # defensive — filter above should guarantee
@@ -257,7 +268,41 @@ def run(
             critic_rejected += 1
             continue
 
-        # APPROVE — attempt merge.
+        # APPROVE — arm GitHub's auto-merge first (idempotent).
+        # This is the single point of arming so every critic-approved PR
+        # gets ``gh pr merge --auto`` even if the earlier dispatch step
+        # missed it.  Already-armed PRs are a silent no-op from gh's side.
+        arm_ok = client.enable_auto_merge(repo, pr.number, method=merge_method)
+        if arm_ok:
+            auto_merge_armed += 1
+            logger.info(
+                "auto_merge: armed auto-merge for PR #%d (task %s)",
+                pr.number,
+                task.identifier,
+            )
+            _emit_noop(
+                conn, task,
+                "auto_merge_armed",
+                {"pr_number": pr.number},
+            )
+        else:
+            auto_merge_arm_failed += 1
+            logger.warning(
+                "auto_merge: enable_auto_merge failed for PR #%d (task %s); "
+                "falling back to direct merge",
+                pr.number,
+                task.identifier,
+            )
+            _emit_noop(
+                conn, task,
+                "auto_merge_arm_failed",
+                {"pr_number": pr.number},
+            )
+
+        # Attempt a direct merge regardless of whether arming succeeded.
+        # When auto-merge is armed and CI/protections are satisfied GitHub
+        # will complete the merge automatically, but if the PR is already
+        # mergeable right now the direct call is the fast path.
         ok = client.merge_pr(repo, pr.number, method=merge_method)
         if ok:
             _transition_to_merged(conn, task, by="auto_merge")
@@ -276,6 +321,8 @@ def run(
         already_merged=already_merged,
         critic_rejected=critic_rejected,
         merge_failed=merge_failed,
+        auto_merge_armed=auto_merge_armed,
+        auto_merge_arm_failed=auto_merge_arm_failed,
     )
 
 

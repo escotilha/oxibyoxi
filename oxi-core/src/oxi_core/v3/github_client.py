@@ -13,6 +13,11 @@ actually needs:
 - ``get_pr(repo, pr_number)`` — read one PR's state + CI status.
 - ``merge_pr(repo, pr_number, method)`` — squash-merge a PR (used by
   auto_merge; not by pr_watcher itself).
+- ``enable_auto_merge(repo, pr_number, method)`` — arm GitHub's
+  auto-merge feature on a PR via ``gh pr merge --auto``.  Idempotent:
+  calling it on an already-armed PR is a no-op that returns True.
+  Used by auto_merge when the critic approves — this is the single
+  point of arming so no PR is shipped without the gate.
 - ``list_check_runs(repo, pr_number)`` — return individual check runs
   attached to the PR's HEAD commit (used by ci_issue_filer to surface
   specific failing checks in the ledger).
@@ -66,6 +71,7 @@ class PullRequest:
     state: PRState
     check_status: PRCheckStatus
     mergeable: bool | None  # None when GitHub hasn't decided yet
+    auto_merge_armed: bool = False  # True when GitHub's auto-merge is enabled
 
 
 @dataclass(frozen=True)
@@ -123,6 +129,24 @@ class GitHubClient(Protocol):
 
         ``method`` is one of 'merge', 'squash', 'rebase'. Default is
         'squash' because that's what most oxi-adjacent projects use.
+        """
+
+    def enable_auto_merge(
+        self, repo: str, pr_number: int, *, method: str = "squash"
+    ) -> bool:
+        """Arm GitHub's auto-merge on a PR.
+
+        Calls ``gh pr merge --auto --squash --delete-branch`` (or the
+        equivalent for ``method``).  Returns True on success.  Idempotent:
+        if auto-merge is already enabled GitHub silently no-ops and ``gh``
+        returns exit 0, so this method returns True without error.
+
+        Returns False when the PR cannot be armed (e.g. the repository has
+        not enabled auto-merge at the settings level, or the PR is already
+        merged/closed).
+
+        ``method`` is one of 'merge', 'squash', 'rebase'. Default is
+        'squash'.
         """
 
     def list_check_runs(
@@ -192,7 +216,7 @@ class GhCliClient:
             self._binary, "pr", "list",
             "--repo", repo,
             "--state", "open",
-            "--json", "number,title,headRefName,state,mergeable,statusCheckRollup",
+            "--json", "number,title,headRefName,state,mergeable,statusCheckRollup,autoMergeRequest",
             "--limit", "100",
         ]
         out = self._run(args)
@@ -206,7 +230,7 @@ class GhCliClient:
         args = [
             self._binary, "pr", "view", str(pr_number),
             "--repo", repo,
-            "--json", "number,title,headRefName,state,mergeable,statusCheckRollup",
+            "--json", "number,title,headRefName,state,mergeable,statusCheckRollup,autoMergeRequest",
         ]
         try:
             out = self._run(args)
@@ -227,6 +251,35 @@ class GhCliClient:
         args = [
             self._binary, "pr", "merge", str(pr_number),
             "--repo", repo,
+            flag_map[method],
+        ]
+        try:
+            self._run(args)
+            return True
+        except GitHubError:
+            return False
+
+    def enable_auto_merge(
+        self, repo: str, pr_number: int, *, method: str = "squash"
+    ) -> bool:
+        """Arm GitHub's auto-merge on a PR.
+
+        Shells to ``gh pr merge --auto --delete-branch <method-flag>``.
+        Idempotent: GitHub silently no-ops when auto-merge is already
+        armed, and ``gh`` exits 0 in that case.
+
+        Returns True on success (including already-armed), False when
+        the call fails (e.g. the repository does not have auto-merge
+        enabled at the settings level).
+        """
+        flag_map = {"merge": "--merge", "squash": "--squash", "rebase": "--rebase"}
+        if method not in flag_map:
+            raise ValueError(f"unknown merge method {method!r}")
+        args = [
+            self._binary, "pr", "merge", str(pr_number),
+            "--repo", repo,
+            "--auto",
+            "--delete-branch",
             flag_map[method],
         ]
         try:
@@ -348,6 +401,9 @@ class GhCliClient:
         else:
             mergeable = mergeable_raw == "MERGEABLE"
 
+        # ``autoMergeRequest`` is non-null when GitHub's auto-merge is armed.
+        auto_merge_armed = raw.get("autoMergeRequest") is not None
+
         return PullRequest(
             number=int(raw["number"]),
             title=raw.get("title", ""),
@@ -355,6 +411,7 @@ class GhCliClient:
             state=state,
             check_status=_rollup_to_status(raw.get("statusCheckRollup", [])),
             mergeable=mergeable,
+            auto_merge_armed=auto_merge_armed,
         )
 
 
