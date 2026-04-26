@@ -130,3 +130,72 @@ def test_auto_merge_is_on(tmp_path: Path):
 def test_promote_recipe_is_none(tmp_path: Path):
     """Dogfood has no staging/production split — PyPI releases are manual."""
     assert SelfAdapter(repo_root=tmp_path).promote_recipe() is None
+
+
+# ---------------------------------------------------------------------------
+# inference_gateway_url() — T2-36
+# ---------------------------------------------------------------------------
+
+
+def test_inference_gateway_url_returns_config(tmp_path: Path, monkeypatch):
+    """inference_gateway_url() always returns an InferenceGatewayConfig."""
+    from oxi_adapter_self import InferenceGatewayConfig
+
+    monkeypatch.delenv("OXI_GATEWAY_BASE_URL", raising=False)
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    assert isinstance(cfg, InferenceGatewayConfig)
+
+
+def test_inference_gateway_url_from_env(tmp_path: Path, monkeypatch):
+    """OXI_GATEWAY_BASE_URL surfaces as base_url."""
+    monkeypatch.setenv("OXI_GATEWAY_BASE_URL", "http://mac-mini.tail1234.ts.net:4000")
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    assert cfg.base_url == "http://mac-mini.tail1234.ts.net:4000"
+
+
+def test_inference_gateway_url_strips_trailing_slash(tmp_path: Path, monkeypatch):
+    """Trailing slashes are stripped from the gateway URL."""
+    monkeypatch.setenv("OXI_GATEWAY_BASE_URL", "http://mac-mini.tail1234.ts.net:4000/")
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    assert not cfg.base_url.endswith("/")
+
+
+def test_inference_gateway_url_empty_when_env_unset(tmp_path: Path, monkeypatch):
+    """When OXI_GATEWAY_BASE_URL is absent, base_url is empty string."""
+    monkeypatch.delenv("OXI_GATEWAY_BASE_URL", raising=False)
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    assert cfg.base_url == ""
+
+
+def test_inference_gateway_virtual_keys_all_provisioned(tmp_path: Path, monkeypatch):
+    """All three role keys appear when the env vars are set."""
+    monkeypatch.setenv("OXI_GATEWAY_BASE_URL", "http://localhost:4000")
+    monkeypatch.setenv("OXI_GATEWAY_KEY_HEARTBEAT", "sk-hb")
+    monkeypatch.setenv("OXI_GATEWAY_KEY_CLASSIFIER", "sk-cl")
+    monkeypatch.setenv("OXI_GATEWAY_KEY_SUMMARY", "sk-su")
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    assert cfg.virtual_keys == {
+        "heartbeat": "sk-hb",
+        "classifier": "sk-cl",
+        "summary": "sk-su",
+    }
+
+
+def test_inference_gateway_virtual_keys_empty_when_unset(tmp_path: Path, monkeypatch):
+    """No virtual_keys when no key env vars are set."""
+    monkeypatch.delenv("OXI_GATEWAY_BASE_URL", raising=False)
+    monkeypatch.delenv("OXI_GATEWAY_KEY_HEARTBEAT", raising=False)
+    monkeypatch.delenv("OXI_GATEWAY_KEY_CLASSIFIER", raising=False)
+    monkeypatch.delenv("OXI_GATEWAY_KEY_SUMMARY", raising=False)
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    assert cfg.virtual_keys == {}
+
+
+def test_inference_gateway_config_is_frozen(tmp_path: Path, monkeypatch):
+    """InferenceGatewayConfig is a frozen dataclass."""
+    from dataclasses import FrozenInstanceError
+
+    monkeypatch.setenv("OXI_GATEWAY_BASE_URL", "http://localhost:4000")
+    cfg = SelfAdapter(repo_root=tmp_path).inference_gateway_url()
+    with pytest.raises(FrozenInstanceError):
+        cfg.base_url = "mutated"  # type: ignore[misc]

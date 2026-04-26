@@ -36,6 +36,12 @@ exclude = [
   "^https?://localhost",
   "^https?://0\\.0\\.0\\.0",
   "^https?://(100\\.|10\\.|192\\.168\\.|172\\.(1[6-9]|2[0-9]|3[0-1])\\.)",
+  # Tailscale MagicDNS hostnames — not reachable from CI runners.
+  # These appear as example URLs in the litellm-gateway runbook.
+  "^https?://[^/]+\\.tail[0-9a-z]+\\.ts\\.net",
+  # Example placeholder URLs using angle-bracket template tokens.
+  "<tailscale-hostname>",
+  "<id>",
   # Placeholder asset slot — README references the screenshot before
   # it's been captured. docs/assets/README.md documents this is
   # intentional; the broken-image icon flags the pending screenshot.

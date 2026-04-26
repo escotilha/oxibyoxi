@@ -2,7 +2,8 @@
 #
 # Schema
 # ------
-# Each top-level key is a *provider* name (e.g. "anthropic", "xai").
+# Each top-level key is a *provider* name (e.g. "anthropic", "xai",
+# "mac-mini-gateway").
 # Providers are referenced by adapter_name in routing.yaml when the
 # adapter_name maps to a non-agentic InferenceGateway path.
 #
@@ -24,6 +25,15 @@
 #                      LiteLLM gateway.  Absent means the gateway accepts
 #                      unauthenticated (or internally-keyed) requests.
 #
+#   virtual_keys  (map, optional)
+#                    — Per-role virtual key *name* as provisioned on the
+#                      LiteLLM gateway.  Used when a single gateway
+#                      serves multiple oxi roles with individually-scoped
+#                      budget limits.  The map is keyed by role name
+#                      (matching routing.yaml) and the value is the
+#                      LiteLLM virtual key name (not the raw secret —
+#                      the secret is supplied at runtime via an env var).
+#
 # Notes
 # -----
 # - This file is informational/documentary for operators who provision
@@ -33,6 +43,10 @@
 # - The xai block documents the upstream endpoint that the LiteLLM
 #   proxy must be configured to forward "xai/*" model strings to.
 #   See LiteLLM docs: https://docs.litellm.ai/docs/providers/xai
+# - The mac-mini-gateway block documents the LiteLLM proxy already
+#   running on the operator's Mac Mini (per the local-inference skill
+#   setup).  oxi connects to this instead of standing up its own proxy.
+#   See docs/runbooks/litellm-gateway.md for provisioning steps.
 
 anthropic:
   base_url: https://api.anthropic.com
@@ -62,3 +76,67 @@ xai:
   base_url: https://api.x.ai/v1
   litellm_provider: xai
   virtual_key_env: LITELLM_VIRTUAL_KEY_XAI
+
+mac-mini-gateway:
+  # LiteLLM proxy already running on the operator's Mac Mini, reached
+  # via Tailscale.  oxi connects here for all non-agentic InferenceGateway
+  # calls instead of standing up its own proxy.
+  #
+  # URL discovery
+  # -------------
+  # The Tailscale MagicDNS hostname is fixed by convention:
+  #   http://mac-mini.tail<id>.ts.net:4000
+  # The exact hostname is discovered at runtime from the
+  # OXI_GATEWAY_BASE_URL environment variable, which is set by the
+  # operator following docs/runbooks/litellm-gateway.md.
+  #
+  # Per-role virtual keys
+  # ---------------------
+  # Each oxi role is issued its own LiteLLM virtual key so the gateway
+  # can enforce per-role budget limits independently.  The key *names*
+  # below are the LiteLLM "key alias" values; the actual secrets are
+  # supplied at runtime via the environment variables listed alongside.
+  #
+  #   Role               Key alias            Secret env var
+  #   -----------------  -------------------  ------------------------------------
+  #   heartbeat-triage   oxi-heartbeat        OXI_GATEWAY_KEY_HEARTBEAT
+  #   classifier         oxi-classifier       OXI_GATEWAY_KEY_CLASSIFIER
+  #   summary            oxi-summary          OXI_GATEWAY_KEY_SUMMARY
+  #
+  # See docs/runbooks/litellm-gateway.md §"Provision a virtual key"
+  # for the exact LiteLLM Admin API call.
+  #
+  # Provisioning steps (summary — full detail in the runbook)
+  # ----------------------------------------------------------
+  #   1. Ensure LiteLLM is running on the Mac Mini and reachable via
+  #      Tailscale.  Test with:
+  #        curl http://<tailscale-hostname>:4000/health
+  #   2. For each role, call the LiteLLM key-generation endpoint:
+  #        curl -X POST http://<gateway>/key/generate \
+  #          -H "Authorization: Bearer <master-key>" \
+  #          -H "Content-Type: application/json" \
+  #          -d '{"key_alias":"oxi-heartbeat","max_budget":5,"budget_duration":"1d"}'
+  #      Repeat for oxi-classifier and oxi-summary with appropriate budgets.
+  #   3. Export the returned key values:
+  #        export OXI_GATEWAY_BASE_URL=http://<tailscale-hostname>:4000
+  #        export OXI_GATEWAY_KEY_HEARTBEAT=sk-...
+  #        export OXI_GATEWAY_KEY_CLASSIFIER=sk-...
+  #        export OXI_GATEWAY_KEY_SUMMARY=sk-...
+  #   4. Verify with:
+  #        oxi v3 tick --times 1   # no real Claude spend
+  #
+  # Coupling note
+  # -------------
+  # oxi's heartbeat-triage path (T2-38) depends on this gateway being
+  # reachable.  If it is down, heartbeat falls back to today's no-LLM
+  # behaviour (the triage step disables itself).  See T2-38 and the
+  # runbook §"Fallback behaviour when the gateway is unreachable".
+  base_url: "${OXI_GATEWAY_BASE_URL}"
+  virtual_keys:
+    heartbeat: oxi-heartbeat
+    classifier: oxi-classifier
+    summary: oxi-summary
+  virtual_key_envs:
+    heartbeat: OXI_GATEWAY_KEY_HEARTBEAT
+    classifier: OXI_GATEWAY_KEY_CLASSIFIER
+    summary: OXI_GATEWAY_KEY_SUMMARY

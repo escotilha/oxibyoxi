@@ -86,6 +86,7 @@ nav:
       - Plan: PLAN.md
   - Runbooks:
       - Install: runbooks/install.md
+      - LiteLLM Gateway: runbooks/litellm-gateway.md
       - Release: runbooks/release.md
       - Rollback: runbooks/rollback.md
       - Troubleshoot: runbooks/troubleshoot.md

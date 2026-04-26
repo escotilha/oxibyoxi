@@ -13,6 +13,7 @@ against the reference pattern.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +28,29 @@ from oxi_core.adapter import (
 from oxi_core.compute_probe import recommend_concurrency
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Gateway configuration dataclass (T2-36)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class InferenceGatewayConfig:
+    """Connection details for the Mac Mini LiteLLM gateway.
+
+    Attributes:
+        base_url: LiteLLM proxy root URL, e.g.
+            ``"http://mac-mini.tail1234.ts.net:4000"``.
+            Sourced from ``OXI_GATEWAY_BASE_URL``; empty string when unset
+            (gateway is unconfigured).
+        virtual_keys: mapping of role name → virtual API key secret
+            (the ``sk-...`` value returned by LiteLLM's key/generate
+            endpoint).  Keys present only when the corresponding env var
+            is set; callers must treat absence as "key not provisioned".
+    """
+
+    base_url: str
+    virtual_keys: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -146,6 +170,56 @@ class SelfAdapter:
         # Dogfood loop has no staging/production split — PyPI release is
         # manual via scripts/release.sh. Kept None intentionally.
         return None
+
+    # ---- Inference gateway (T2-36) ----
+
+    def inference_gateway_url(self) -> InferenceGatewayConfig:
+        """Return connection details for the Mac Mini LiteLLM gateway.
+
+        The gateway URL and per-role virtual keys are read from environment
+        variables set by the operator following
+        ``docs/runbooks/litellm-gateway.md``.
+
+        Returns an ``InferenceGatewayConfig`` with:
+          - ``base_url``: value of ``OXI_GATEWAY_BASE_URL`` (empty string
+            when unset, meaning the gateway is not configured).
+          - ``virtual_keys``: mapping of role → key secret for each role
+            whose ``OXI_GATEWAY_KEY_<ROLE>`` env var is set.  Roles whose
+            env vars are absent are omitted so callers can detect
+            "not provisioned" without catching exceptions.
+
+        Coupling note: T2-38 wires the heartbeat-triage path to call this
+        method and falls back to no-LLM behaviour when ``base_url`` is
+        empty or ``"heartbeat"`` is absent from ``virtual_keys``.
+        """
+        base_url = os.environ.get("OXI_GATEWAY_BASE_URL", "").rstrip("/")
+
+        _KEY_ENV_VARS: dict[str, str] = {
+            "heartbeat": "OXI_GATEWAY_KEY_HEARTBEAT",
+            "classifier": "OXI_GATEWAY_KEY_CLASSIFIER",
+            "summary": "OXI_GATEWAY_KEY_SUMMARY",
+        }
+        virtual_keys: dict[str, str] = {}
+        for role, env_var in _KEY_ENV_VARS.items():
+            value = os.environ.get(env_var, "")
+            if value:
+                virtual_keys[role] = value
+
+        if base_url:
+            logger.info(
+                "self_adapter.inference_gateway.configured",
+                extra={
+                    "base_url": base_url,
+                    "roles_provisioned": sorted(virtual_keys.keys()),
+                },
+            )
+        else:
+            logger.debug("self_adapter.inference_gateway.unconfigured")
+
+        return InferenceGatewayConfig(
+            base_url=base_url,
+            virtual_keys=virtual_keys,
+        )
 
     # ---- Plan tier + policy ----
 
