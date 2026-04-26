@@ -6,11 +6,28 @@ Timeout policy (enforced by pytest-timeout):
 
 The hook runs after collection so it overrides the global default without
 requiring each slow test to repeat ``@pytest.mark.timeout(180)``.
+
+sys.path bootstrap
+------------------
+The installed ``oxi-core`` package may point to a *different* worktree (the
+editable install is keyed to whatever worktree last ran ``pip install -e .``).
+To ensure tests always use *this* worktree's source, we prepend the local
+``src/`` directory to ``sys.path`` here — conftest.py is loaded before any
+test module is imported, so the path is correct for all collection.
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+# Prepend the local src/ so oxi_core resolves to *this* worktree's source,
+# even when a different editable install is on sys.path.
+_OXI_CORE_SRC = Path(__file__).resolve().parents[1] / "src"
+if _OXI_CORE_SRC.exists() and str(_OXI_CORE_SRC) not in sys.path:
+    sys.path.insert(0, str(_OXI_CORE_SRC))
 
 _SLOW_TIMEOUT = 180  # seconds
 
