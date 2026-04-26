@@ -502,6 +502,16 @@ def run(
     print("  2. pip install -e .")
     print("  3. oxi status   # confirms the adapter loads")
     print()
+    print(
+        "If you also have the bundled `self` adapter installed (or any other "
+        "oxi adapter), pin this one for the current shell with:"
+    )
+    print(f"     export OXI_ADAPTER=oxi_adapter_{answers.package_suffix}:Adapter")
+    print(
+        "A `.env` containing the same pin is written next to the adapter — "
+        "tools that auto-load .env (direnv, dotenv) will pick it up."
+    )
+    print()
     print("Edit src/oxi_adapter_" + answers.package_suffix + "/adapter.py to tune.")
     return answers
 
