@@ -167,6 +167,17 @@ class LedgerEvent(StrEnum):
     # Payload: {signal_kind, target_identifier, proposal_identifier, counter}.
     EXTERNAL_PROPOSAL_EMITTED = auto()
 
+    # --- agentic shadow (T2-35) --------------------------------------------
+    # Paired primary+shadow dispatch observation.  Written once per primary
+    # invoke() call when OXI_AGENTIC_SHADOW=codex.  task_id is NULL because
+    # this event is cross-cutting; session_id in the payload links it to the
+    # primary dispatch.
+    # Payload: {session_id, primary_class, shadow_class, shape_match,
+    #           primary_cost_usd, shadow_cost_usd, cost_delta_usd,
+    #           primary_wall_s, shadow_wall_s, shadow_backend,
+    #           shadow_exit_code, shadow_error}.
+    AGENTIC_SHADOW_OBSERVED = auto()
+
 
 # ---------------------------------------------------------------------------
 # Convenience helpers for dynamically-composed kinds
