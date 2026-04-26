@@ -435,12 +435,17 @@ def cmd_tick(args: argparse.Namespace) -> int:
     else:
         print(f"oxi: tick --times {args.times} (reconciliation-only)")
 
-    from .v3 import auto_recover, heartbeat
+    from .v3 import auto_recover, heartbeat, ingest_roadmap, seed_from_roadmap
+
+    repo_root_str = adapter.paths().repo_root or "."
+    repo_root = Path(repo_root_str)
 
     handle = connect()
     try:
         total_abandoned = 0
         total_recovered = 0
+        total_ingested = 0
+        total_seeded = 0
         for iteration in range(args.times):
             if state.is_stopping():
                 break
@@ -489,6 +494,39 @@ def cmd_tick(args: argparse.Namespace) -> int:
                     recover_line = green(recover_line)
                 print(recover_line)
 
+            # Ingest the roadmap and seed the planned queue. Idempotent:
+            # ingest upserts items by ID, seed only promotes items that
+            # aren't already in `task`. Mirrors saturate's contract so a
+            # fresh install with `oxi v3 tick --times 1` lands tasks in
+            # the queue without needing the supervisor loop. Missing
+            # roadmap → warn and continue (heartbeat/recover have
+            # already run; tick still has value as a reconciliation pass).
+            try:
+                ingest_report = ingest_roadmap.ingest(
+                    handle.connection, repo_root=repo_root
+                )
+                total_ingested += ingest_report.inserted + ingest_report.updated
+                if ingest_report.inserted or ingest_report.updated:
+                    print(
+                        f"  ingest_roadmap: inserted={ingest_report.inserted} "
+                        f"updated={ingest_report.updated}"
+                    )
+            except FileNotFoundError as exc:
+                print(yellow(f"  ingest_roadmap: roadmap not found ({exc})"))
+
+            try:
+                seed_report = seed_from_roadmap.seed(handle.connection, state)
+                total_seeded += seed_report.seeded
+                if seed_report.seeded:
+                    print(
+                        green(
+                            f"  seed_from_roadmap: seeded={seed_report.seeded} "
+                            f"planned_after={seed_report.planned_after}"
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                print(yellow(f"  seed_from_roadmap: failed ({exc})"))
+
             if args.real_claude:
                 _run_real_claude_tick(handle.connection, state, health, adapter)
 
@@ -505,9 +543,13 @@ def cmd_tick(args: argparse.Namespace) -> int:
         # Preserve the legacy summary line so existing capsys assertions
         # in tests/test_cli.py continue to match on the substring
         # "tick done." with the abandoned / auto_recovered counts.
+        # Ingest/seed counts are appended after — older tests grep for
+        # the prefix and the abandoned/recovered fields, the suffix is
+        # additive.
         legacy = (
             f"oxi: tick done. abandoned={total_abandoned} "
-            f"auto_recovered={total_recovered}"
+            f"auto_recovered={total_recovered} "
+            f"ingested={total_ingested} seeded={total_seeded}"
         )
         if total_abandoned:
             legacy = yellow(legacy)
