@@ -10,7 +10,7 @@ New operators: follow every step in order. The whole flow takes under five minut
 | pip | any recent | `pip --version` |
 | git | any | `git --version` |
 | gh CLI | 2.x | `gh --version` |
-| Anthropic API key | — | set in env or `~/.config/anthropic/api_key` |
+| Anthropic API key | — | set in env or `~/.config/anthropic/api_key` (required for agentic dispatch — see "Inference" below) |
 
 You need a GitHub repo and a local checkout of it. oxi ships PRs against that repo; it never touches unrelated repositories.
 
@@ -26,6 +26,17 @@ brew install python@3.13
 Then **always invoke that interpreter explicitly** (`python3.13 -m venv …`, `python3.13 -m pip …`) — your shell's `python3` will still resolve to Apple's 3.9 until you activate a venv.
 
 On Ubuntu/Debian: `sudo apt install python3.13 python3.13-venv`. On Fedora: `sudo dnf install python3.13`.
+
+### Inference: agentic vs non-agentic
+
+oxi has two inference paths and they have different model support. Worth knowing before you set up keys:
+
+| Path | What it runs | Models supported today |
+|---|---|---|
+| **Agentic dispatch** — the worker that writes code and opens PRs | `claude -p` subprocess in a git worktree | Anthropic Claude only (the wizard's "plan tier" question is about this path) |
+| **Non-agentic inference** — planner heuristics, classification, ranking, dedup, summary | `InferenceGateway` via [LiteLLM](https://docs.litellm.ai/) | Anthropic, OpenRouter, xAI/Grok, anything LiteLLM speaks |
+
+If you only have an Anthropic API key you can skip the non-agentic configuration — every role falls back to Anthropic. If you want to route the cheap heuristics through OpenRouter (cost) or a local LiteLLM gateway (latency, privacy), see [`docs/runbooks/litellm-gateway.md`](litellm-gateway.md). Multi-provider **agentic** dispatch (Codex, Aider, etc. as alternative workers) is on the roadmap as the T2-30 series — not shipping yet.
 
 ---
 

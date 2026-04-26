@@ -75,6 +75,8 @@ oxi v3 tick --real-claude       # spends budget, ships PRs
 
 The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks/install.md). Full operator manual at [`docs/manual/`](docs/manual/).
 
+**Models.** The agentic worker (the thing that writes code and opens PRs) runs Claude — that's what the wizard's "plan tier" question is about. The non-agentic side (planner, classifier, ranker, dedup, summary) goes through an `InferenceGateway` and already supports OpenRouter and xAI/Grok via LiteLLM; configure it with [`docs/runbooks/litellm-gateway.md`](docs/runbooks/litellm-gateway.md). Multi-provider agentic workers (Codex, Aider) are tracked on the [roadmap](docs/roadmap.md) as the T2-30 series.
+
 **Status:** beta (`0.1.0b1` on PyPI). The engine has been dogfooding itself for two days — 100+ PRs merged across the build, every safety rail proven in production, parallel dispatch + auto-merge live, daily-cap raised to $100 once the engine showed it could spend it productively. See [release notes](docs/release-notes/v0.1.0b1.md) for what's in this cut.
 
 ## How it works
