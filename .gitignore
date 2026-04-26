@@ -42,3 +42,7 @@ site/
 
 # Lychee link-check cache (CI uses actions/cache; local runs write here)
 .lycheecache/
+
+# Local dogfood scaffold from `oxi init`. Regenerable, operator-specific,
+# not part of the engine's source tree.
+oxi-adapter-oxibyoxi/
