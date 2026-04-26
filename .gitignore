@@ -46,3 +46,6 @@ site/
 # Local dogfood scaffold from `oxi init`. Regenerable, operator-specific,
 # not part of the engine's source tree.
 oxi-adapter-oxibyoxi/
+
+# Local-only resume note (per-session, not part of repo history)
+TOMORROW.md
