@@ -157,6 +157,16 @@ class LedgerEvent(StrEnum):
     # sources continue.  Payload: {source_kind, source_name, error}.
     AUTO_IMPROVE_SOURCE_FAILED = auto()
 
+    # --- auto_external dedup (B7) ------------------------------------------
+    # A candidate was dropped by the three-layer dedup stage before emission.
+    # Payload: {signal_kind, target_identifier, layer, reason}.
+    # ``layer`` is one of "identifier", "semantic", "temporal".
+    EXTERNAL_PROPOSAL_DEDUP_SKIPPED = auto()
+
+    # A candidate survived all dedup layers and was emitted as a proposal.
+    # Payload: {signal_kind, target_identifier, proposal_identifier, counter}.
+    EXTERNAL_PROPOSAL_EMITTED = auto()
+
 
 # ---------------------------------------------------------------------------
 # Convenience helpers for dynamically-composed kinds

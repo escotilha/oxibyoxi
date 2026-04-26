@@ -331,12 +331,22 @@ def _run_dedup(
     conn: sqlite3.Connection,
     config: object,
 ) -> list[dict]:
-    """Apply three-layer deduplication.
+    """Apply three-layer deduplication (B7 implementation).
 
-    Stub until B7.  Passes all candidates through.
+    Delegates to :func:`oxi_core.v3.auto_external.dedup.run_dedup` which
+    applies identifier → semantic → temporal layers in order.  Candidates
+    that are dropped by any layer generate an
+    ``EXTERNAL_PROPOSAL_DEDUP_SKIPPED`` ledger event.
+
+    ``config`` is accepted but unused at this stage; dedup thresholds use
+    module-level defaults (``SEMANTIC_THRESHOLD=0.85``,
+    ``TEMPORAL_WINDOW_DAYS=14``).  A future B7-extension PR may thread
+    adapter-configurable thresholds through here.
     """
-    _ = conn, config  # noqa: F841
-    return candidates
+    _ = config  # noqa: F841
+    from .dedup import run_dedup
+
+    return run_dedup(candidates, conn)
 
 
 def _run_emit(
