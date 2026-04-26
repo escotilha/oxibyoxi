@@ -24,6 +24,7 @@ from ._glyphs import glyph_for_status
 from ._logo import LOGO
 from .brief import generate as generate_brief
 from .engine_health import HEALTH_BANNER, is_engine_unhealthy_from_db
+from .ledger_events import LedgerEvent
 
 
 @dataclass(frozen=True)
@@ -229,6 +230,161 @@ def _render_hero(
     )
 
 
+# ---------------------------------------------------------------------------
+# Agentic shadow panel (T2-35)
+# ---------------------------------------------------------------------------
+
+#: Maximum number of shadow observations rendered in the panel.
+_SHADOW_PANEL_LIMIT = 50
+
+
+def _shadow_panel_rows(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = _SHADOW_PANEL_LIMIT,
+) -> list[dict]:
+    """Return up to *limit* most-recent ``agentic_shadow_observed`` events.
+
+    Each element is the parsed JSON payload dict enriched with
+    ``created_at``.  Fields missing from older payloads are defaulted to
+    safe values so the renderer never KeyErrors on schema evolution.
+    """
+    import json as _json
+
+    rows = conn.execute(
+        "SELECT created_at, payload FROM event "
+        "WHERE kind = ? "
+        "ORDER BY id DESC LIMIT ?",
+        (LedgerEvent.AGENTIC_SHADOW_OBSERVED, limit),
+    ).fetchall()
+
+    result = []
+    for row in rows:
+        try:
+            payload = _json.loads(row["payload"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        payload.setdefault("session_id", "")
+        payload.setdefault("primary_class", "")
+        payload.setdefault("shadow_class", "")
+        payload.setdefault("shape_match", False)
+        payload.setdefault("cost_delta_usd", 0.0)
+        payload.setdefault("shadow_error", "")
+        payload["created_at"] = row["created_at"] or ""
+        result.append(payload)
+    return result
+
+
+def _shadow_agreement_rate(rows: list[dict]) -> float | None:
+    """Compute the agreement rate (0.0–1.0) over *rows*.
+
+    Returns ``None`` when *rows* is empty (caller renders "—").
+    """
+    if not rows:
+        return None
+    matches = sum(1 for r in rows if r.get("shape_match"))
+    return matches / len(rows)
+
+
+def _shadow_mean_cost_delta(rows: list[dict]) -> float | None:
+    """Compute the mean ``cost_delta_usd`` over *rows*.
+
+    Returns ``None`` when *rows* is empty.
+    """
+    if not rows:
+        return None
+    return sum(r.get("cost_delta_usd", 0.0) for r in rows) / len(rows)
+
+
+def _render_shadow_panel(rows: list[dict]) -> str:
+    """Render the agentic-shadow HTML panel.
+
+    Shows:
+    - Agreement rate (shape_match %) over the last N runs.
+    - Mean cost delta (shadow − primary).
+    - Per-row table: timestamp, session_id (first 8 chars), primary class,
+      shadow class, match glyph, cost delta.
+
+    All user-controlled strings are HTML-escaped.  Returns a ``<section>``
+    element so it can be inserted verbatim into the page body.
+    """
+    agree_rate = _shadow_agreement_rate(rows)
+    mean_delta = _shadow_mean_cost_delta(rows)
+
+    if agree_rate is None:
+        agree_str = "—"
+        delta_str = "—"
+        note = "<em>No shadow observations yet.  Set <code>OXI_AGENTIC_SHADOW=codex</code> to enable.</em>"
+    else:
+        agree_str = f"{agree_rate * 100:.1f}%"
+        delta_str = f"{mean_delta:+.4f} USD" if mean_delta is not None else "—"
+        note = ""
+
+    header = (
+        '<div class="shadow-stats">'
+        f'<span class="shadow-stat">Agreement rate: <strong>{html.escape(agree_str)}</strong>'
+        f" (last {len(rows)} runs)</span>"
+        f' &nbsp; <span class="shadow-stat">Mean cost delta: <strong>{html.escape(delta_str)}</strong></span>'
+        "</div>"
+    )
+
+    if not rows:
+        table_html = f"<p>{note}</p>"
+    else:
+        tbody_parts = []
+        for r in rows:
+            session_short = html.escape(str(r.get("session_id", ""))[:8])
+            ts = html.escape(str(r.get("created_at", "")))
+            primary_class = html.escape(str(r.get("primary_class", "")))
+            shadow_class = html.escape(str(r.get("shadow_class", "")))
+            match = r.get("shape_match", False)
+            match_glyph = "✓" if match else "✗"
+            match_color = "#3a7d3a" if match else "#a52a2a"
+            delta = float(r.get("cost_delta_usd", 0.0))
+            delta_str_row = f"{delta:+.4f}"
+            err = str(r.get("shadow_error", ""))
+            err_cell = (
+                f'<td><code title="{html.escape(err)}">'
+                f"{html.escape(err[:40])}{'…' if len(err) > 40 else ''}</code></td>"
+                if err
+                else "<td></td>"
+            )
+            tbody_parts.append(
+                "<tr>"
+                f"<td>{ts}</td>"
+                f"<td><code>{session_short}</code></td>"
+                f"<td>{primary_class}</td>"
+                f"<td>{shadow_class}</td>"
+                f'<td style="color:{match_color};font-weight:bold">{match_glyph}</td>'
+                f"<td>{html.escape(delta_str_row)}</td>"
+                f"{err_cell}"
+                "</tr>"
+            )
+        tbody = "".join(tbody_parts)
+        table_html = (
+            '<table class="shadow-table">'
+            "<thead><tr>"
+            "<th>timestamp</th>"
+            "<th>session</th>"
+            "<th>primary</th>"
+            "<th>shadow</th>"
+            "<th>match</th>"
+            "<th>cost delta (USD)</th>"
+            "<th>shadow error</th>"
+            "</tr></thead>"
+            f"<tbody>{tbody}</tbody>"
+            "</table>"
+        )
+
+    return (
+        '<section class="shadow-panel">'
+        "<h2>Agentic shadow <small>(codex vs Claude)</small></h2>"
+        f"{header}"
+        f"{table_html}"
+        "</section>"
+    )
+
+
 def _recovered_task_ids(conn: sqlite3.Connection) -> set[int]:
     """Return task IDs that have at least one ``auto_recover_attempted`` event.
 
@@ -317,6 +473,12 @@ def render_html(conn: sqlite3.Connection, *, window_hours: int = 24) -> str:
             "</tr>"
         )
     task_rows = "".join(task_rows_parts) or "<tr><td colspan=5><em>no tasks</em></td></tr>"
+
+    # Agentic shadow panel — fetch the last 50 paired observations and
+    # render the panel.  Always rendered; shows a "not yet enabled" note
+    # when no events exist.
+    shadow_rows = _shadow_panel_rows(conn)
+    shadow_panel_html = _render_shadow_panel(shadow_rows)
 
     # Health banner — shown when the engine's consecutive-failure threshold
     # was crossed.  The in-memory EngineHealth is not accessible from here
@@ -450,6 +612,32 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
   white-space: nowrap;
 }}
 .ev-table th {{ background: #efefef; }}
+.shadow-panel {{
+  margin: 2rem 0;
+  padding: 1rem 1.2rem;
+  background: #f5f9ff;
+  border: 1px solid #c8ddf8;
+  border-radius: 6px;
+}}
+.shadow-panel h2 {{
+  margin-top: 0;
+  color: #1a5a99;
+}}
+.shadow-panel h2 small {{
+  font-size: 0.7em;
+  color: #666;
+  font-weight: normal;
+}}
+.shadow-stats {{
+  margin-bottom: 0.8rem;
+  font-size: 0.95rem;
+}}
+.shadow-stat {{
+  display: inline-block;
+}}
+.shadow-table {{
+  font-size: 0.82em;
+}}
 </style>
 </head>
 <body>
@@ -492,6 +680,8 @@ code {{ background: #f0f0f0; padding: 0 0.2rem; border-radius: 2px; }}
   <thead><tr><th>id</th><th>title</th><th>status</th><th>pr</th><th>last progress</th></tr></thead>
   <tbody>{task_rows}</tbody>
 </table>
+
+{shadow_panel_html}
 
 </body>
 </html>
@@ -575,6 +765,7 @@ __all__ = [
     "serve",
 ]
 
-# _recovered_task_ids, _task_last_events, _render_task_events are
-# intentionally not in __all__ — they are internal query/render helpers.
-# Tests that need them import directly.
+# _recovered_task_ids, _task_last_events, _render_task_events,
+# _shadow_panel_rows, _shadow_agreement_rate, _shadow_mean_cost_delta,
+# _render_shadow_panel are intentionally not in __all__ — they are
+# internal query/render helpers.  Tests that need them import directly.
