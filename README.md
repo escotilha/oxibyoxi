@@ -59,14 +59,19 @@ $ gh pr list --state merged
 
 ## Install
 
+oxi requires **Python 3.11+**. macOS ships 3.9, so most Mac users need to install a newer Python first (`brew install python@3.13`). On Ubuntu/Debian: `sudo apt install python3.13 python3.13-venv`.
+
 ```bash
+# from inside your project's checkout
+python3.13 -m venv .venv && source .venv/bin/activate
 pip install --pre oxi-core      # beta — --pre still required while on 0.1.0b*
-cd my-project
 oxi init                        # 8-prompt wizard scaffolds your adapter
 cd oxi-adapter-myproject && pip install -e .
 oxi status                      # ✓ adapter loaded
 oxi v3 tick --real-claude       # spends budget, ships PRs
 ```
+
+> **Hit `Could not find a version that satisfies the requirement oxi-core`?** Your pip is bound to Python <3.11. Check with `python3 --version`; on macOS the stock `python3` is 3.9. Install 3.11+ as above and create the venv with the explicit interpreter (`python3.13 -m venv .venv`).
 
 The five-minute install runbook is at [`docs/runbooks/install.md`](docs/runbooks/install.md). Full operator manual at [`docs/manual/`](docs/manual/).
 

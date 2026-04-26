@@ -6,7 +6,7 @@ New operators: follow every step in order. The whole flow takes under five minut
 
 | Tool | Minimum version | Check |
 |---|---|---|
-| Python | 3.11 | `python --version` |
+| Python | 3.11 | `python3 --version` |
 | pip | any recent | `pip --version` |
 | git | any | `git --version` |
 | gh CLI | 2.x | `gh --version` |
@@ -14,28 +14,49 @@ New operators: follow every step in order. The whole flow takes under five minut
 
 You need a GitHub repo and a local checkout of it. oxi ships PRs against that repo; it never touches unrelated repositories.
 
+### Python 3.11+ on macOS
+
+macOS ships Python 3.9 as `/usr/bin/python3` and you cannot remove or upgrade it. Install a newer Python alongside it:
+
+```bash
+brew install python@3.13
+/opt/homebrew/bin/python3.13 --version   # confirm
+```
+
+Then **always invoke that interpreter explicitly** (`python3.13 -m venv …`, `python3.13 -m pip …`) — your shell's `python3` will still resolve to Apple's 3.9 until you activate a venv.
+
+On Ubuntu/Debian: `sudo apt install python3.13 python3.13-venv`. On Fedora: `sudo dnf install python3.13`.
+
 ---
 
 ## Step 1 — install oxi-core
 
-oxi is still in alpha. pip's default resolver ignores pre-releases, so
+oxi is still in beta. pip's default resolver ignores pre-releases, so
 you must pass `--pre` or pin the version explicitly. Otherwise pip
-grabs the `0.0.0` name-reservation stub instead of the working alpha.
+grabs the `0.0.0` name-reservation stub instead of the working beta.
+
+Always install into a venv — it isolates oxi from your system Python and avoids the `--user`/`PATH` follow-ups below:
 
 ```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
 pip install --pre oxi-core
 # or pin explicitly:
-pip install oxi-core==0.1.0a4
+pip install oxi-core==0.1.0b1
 ```
 
 Verify:
 
 ```bash
 oxi --version
-# oxi 0.1.0a4
+# oxi 0.1.0b1
 ```
 
-If `oxi` is not found after install, your pip's `bin/` directory is not on `PATH`. Find it with `pip show -f oxi-core | grep Scripts` (Windows) or `python -m site --user-base` (macOS/Linux) and add `<base>/bin` to `PATH`.
+### Troubleshooting
+
+**`ERROR: Could not find a version that satisfies the requirement oxi-core` (with a line above mentioning `Requires-Python >=3.11`)** — your pip is bound to Python <3.11. Run `python3 --version` to confirm. On macOS the stock `python3` is 3.9; see "Python 3.11+ on macOS" above, then create the venv with `python3.13 -m venv .venv` (the explicit interpreter is what makes the difference).
+
+**`oxi: command not found` after a successful install** — you installed outside a venv and pip's `bin/` directory is not on `PATH`. Either re-install inside a venv (recommended), or find the directory with `python3 -m site --user-base` (macOS/Linux) or `pip show -f oxi-core | grep Scripts` (Windows) and add `<base>/bin` to `PATH`.
 
 ---
 
