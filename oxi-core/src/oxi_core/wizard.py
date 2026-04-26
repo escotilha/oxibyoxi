@@ -512,6 +512,15 @@ def run(
         "tools that auto-load .env (direnv, dotenv) will pick it up."
     )
     print()
+    print(
+        "Models: the agentic worker (`claude -p`) is Claude-only, governed by "
+        "the plan tier you just set. The non-agentic InferenceGateway "
+        "(planner, classifier, ranker, dedup, summary) speaks Anthropic, "
+        "OpenRouter, and xAI/Grok via LiteLLM. See `.env.example` next to "
+        "the adapter; gateway setup is documented at "
+        "https://github.com/escotilha/oxibyoxi/blob/main/docs/runbooks/litellm-gateway.md"
+    )
+    print()
     print("Edit src/oxi_adapter_" + answers.package_suffix + "/adapter.py to tune.")
     return answers
 
