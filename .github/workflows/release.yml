@@ -135,12 +135,17 @@ jobs:
           /tmp/smoke-venv/bin/pip install dist/*.whl
 
       - name: Verify oxi --version
+        # `oxi --version` prints the ASCII brand logo (T1-25, commit cf535fe)
+        # plus the literal version on a separate line. Use substring matching
+        # against the full output so future logo/format changes don't break
+        # this gate — the contract is "the expected version string appears
+        # somewhere in the output", not "output is exactly N characters".
         run: |
-          installed_version=$(/tmp/smoke-venv/bin/oxi --version)
-          echo "Installed: $installed_version"
-          expected="oxi ${EXPECTED_VERSION}"
-          if [[ "$installed_version" != "$expected" ]]; then
-            echo "version mismatch: got '$installed_version', expected '$expected'" >&2
+          installed_output=$(/tmp/smoke-venv/bin/oxi --version)
+          echo "Output:"
+          echo "$installed_output"
+          if ! echo "$installed_output" | grep -qF "oxi ${EXPECTED_VERSION}"; then
+            echo "version not found in output: expected substring 'oxi ${EXPECTED_VERSION}'" >&2
             exit 1
           fi
 
