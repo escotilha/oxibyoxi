@@ -1,0 +1,192 @@
+# Release workflow for oxi-core.
+#
+# Manual-trigger only (workflow_dispatch). Does NOT auto-fire on tag push —
+# the first invocation of any release workflow should be human-supervised
+# from the GitHub Actions UI so the operator can read the logs in real time
+# and abort before publish if anything looks wrong.
+#
+# Once you've seen one full successful cycle (TestPyPI dry-run + real
+# publish) and have confidence in the workflow, you can flip the trigger
+# to `push.tags: ['v*']` for tag-driven publishes. Until then, manual.
+#
+# Prerequisites (one-time setup on PyPI side):
+#   1. Go to https://pypi.org/manage/project/oxi-core/settings/publishing/
+#   2. Add a "Trusted Publisher" with:
+#        - PyPI Project Name: oxi-core
+#        - Owner: escotilha
+#        - Repository name: oxibyoxi
+#        - Workflow name: release.yml
+#        - Environment name: pypi
+#   3. Repeat at https://test.pypi.org/manage/project/oxi-core/settings/publishing/
+#      with the same values BUT environment name: testpypi
+#   4. In this repo, create two GitHub Environments:
+#        - Settings -> Environments -> New environment -> "pypi"
+#          (recommend: require manual approval before any deployment to this env)
+#        - Settings -> Environments -> New environment -> "testpypi"
+#          (no protection needed; testpypi is reversible)
+#
+# Why Trusted Publishing instead of API tokens:
+#   - No long-lived secrets in GitHub Secrets
+#   - Token is minted by PyPI for the specific run, scoped to oxi-core, expires immediately
+#   - Audit trail on PyPI side shows exactly which workflow run published which version
+#   - This is PyPI's recommended path as of 2024+
+#
+# How to use this workflow:
+#   1. Bump oxi-core/pyproject.toml from b1 -> b2
+#   2. Update docs/release-notes/v0.1.0bN.md
+#   3. Commit and push to main
+#   4. Go to Actions tab -> "Release oxi-core" -> Run workflow
+#   5. Pick target: "testpypi" first (verify install in fresh venv works), then "pypi"
+#   6. After a real PyPI publish succeeds, manually `git tag v0.1.0bN && git push --tags`
+#      (the workflow does NOT tag; tagging is the human's signal of "this version is real")
+#
+# Security review notes (per GitHub Actions injection guidance):
+#   - Only inputs are workflow_dispatch.inputs.target (enum, 2 values) and vars.OXI_RUNNER
+#     (repo-scoped Variable, admin-only, also used by ci.yml). Neither flows into a
+#     run: block; both only appear in if: / runs-on: which the runtime treats as expressions
+#     not shell text.
+#   - No github.event.* interpolation anywhere.
+#   - Top-level permissions: contents: read. Only the publish jobs override with
+#     id-token: write (required by PyPI Trusted Publishing OIDC).
+
+name: Release oxi-core
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish (testpypi first, then pypi)"
+        required: true
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+
+# Default to read-only; the publish jobs override with id-token: write.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build wheel + sdist
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
+    outputs:
+      version: ${{ steps.read_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tools
+        run: pip install --upgrade build
+
+      - name: Read version from pyproject.toml
+        id: read_version
+        run: |
+          version=$(grep -m1 '^version = ' oxi-core/pyproject.toml | sed -E 's/version = "(.+)"/\1/')
+          if [[ -z "$version" ]]; then
+            echo "could not read version from oxi-core/pyproject.toml" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building oxi-core version: $version"
+
+      - name: Build wheel + sdist
+        run: |
+          cd oxi-core
+          python -m build --wheel --sdist --outdir ../dist
+
+      - name: Show build artifacts
+        run: ls -la dist/
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  smoke_test:
+    name: Smoke-test built wheel in clean venv
+    needs: build
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
+    env:
+      EXPECTED_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Install built wheel in isolated venv
+        run: |
+          python -m venv /tmp/smoke-venv
+          /tmp/smoke-venv/bin/pip install dist/*.whl
+
+      - name: Verify oxi --version
+        run: |
+          installed_version=$(/tmp/smoke-venv/bin/oxi --version)
+          echo "Installed: $installed_version"
+          expected="oxi ${EXPECTED_VERSION}"
+          if [[ "$installed_version" != "$expected" ]]; then
+            echo "version mismatch: got '$installed_version', expected '$expected'" >&2
+            exit 1
+          fi
+
+      - name: Verify CLI surface (no adapter required)
+        run: |
+          /tmp/smoke-venv/bin/oxi --help
+          /tmp/smoke-venv/bin/oxi v3 --help
+
+  publish_testpypi:
+    name: Publish to TestPyPI
+    if: inputs.target == 'testpypi'
+    needs: [build, smoke_test]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/oxi-core
+    permissions:
+      id-token: write   # required for Trusted Publishing OIDC
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish_pypi:
+    name: Publish to PyPI
+    if: inputs.target == 'pypi'
+    needs: [build, smoke_test]
+    runs-on: ${{ vars.OXI_RUNNER || 'ubuntu-latest' }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/oxi-core
+    permissions:
+      id-token: write   # required for Trusted Publishing OIDC
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
