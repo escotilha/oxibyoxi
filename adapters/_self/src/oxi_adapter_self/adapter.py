@@ -67,7 +67,7 @@ class SelfAdapter:
 
     def naming(self) -> NamingConfig:
         return NamingConfig(
-            instance_name="oxi-dogfood",
+            instance_name="oxibyoxi",
             branch_prefixes=("feat/", "fix/", "chore/"),
         )
 
@@ -108,7 +108,7 @@ class SelfAdapter:
     # ---- Target repo ----
 
     def github_repo(self) -> str:
-        return "escotilha/oxi"
+        return "escotilha/oxibyoxi"
 
     def roadmap_location(self) -> str:
         return "docs/roadmap.md"
