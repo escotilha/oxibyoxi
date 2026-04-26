@@ -42,6 +42,16 @@
 # Pre-requisite: provision your LiteLLM gateway with the xAI provider
 # and a virtual key.  See defaults/inference.yaml for full instructions.
 #
+# Swapping a role to OpenRouter (T2-42)
+# --------------------------------------
+# OpenRouter models are available via the same InferenceGateway path.
+# OpenRouter quirk: cost is returned in usage.total_cost (response body)
+# rather than the x-litellm-response-cost header.  The gateway handles
+# this automatically — no special configuration needed in routing.yaml.
+#
+# Pre-requisite: provision your LiteLLM gateway with the OpenRouter
+# provider and a virtual key.  See defaults/inference.yaml for steps.
+#
 # Env-var overrides are NOT supported here (deferred to T2-40).
 # Fork operators who need different routing should provide their own
 # routing.yaml via the adapter's data-files extension point (TBD).
@@ -60,6 +70,13 @@ worker:
 #   fallback_chain:
 #     - xai/grok-2
 
+# OpenRouter recipe — worker (uncomment to route to Mistral Large via OpenRouter)
+# worker:
+#   adapter_name: openrouter
+#   model_id: openrouter/mistralai/mistral-large-2411
+#   fallback_chain:
+#     - openrouter/deepseek/deepseek-chat-v3-0324
+
 critic:
   adapter_name: anthropic
   model_id: claude-sonnet-4-6
@@ -73,6 +90,13 @@ critic:
 #   fallback_chain:
 #     - xai/grok-code-fast-1
 
+# OpenRouter recipe — critic (uncomment to route to DeepSeek V3 via OpenRouter)
+# critic:
+#   adapter_name: openrouter
+#   model_id: openrouter/deepseek/deepseek-chat-v3-0324
+#   fallback_chain:
+#     - openrouter/meta-llama/llama-3.3-70b-instruct
+
 heartbeat-triage:
   adapter_name: anthropic
   model_id: claude-haiku-4-5-20251001
@@ -83,6 +107,13 @@ heartbeat-triage:
 #   adapter_name: xai
 #   model_id: xai/grok-code-fast-1
 #   fallback_chain: []
+
+# OpenRouter recipe — heartbeat-triage (uncomment to route to Qwen 3 via OpenRouter)
+# heartbeat-triage:
+#   adapter_name: openrouter
+#   model_id: openrouter/qwen/qwen3-235b-a22b
+#   fallback_chain:
+#     - openrouter/meta-llama/llama-3.3-70b-instruct
 
 prompt-injection-screen:
   adapter_name: anthropic
@@ -95,14 +126,32 @@ prompt-injection-screen:
 #   model_id: xai/grok-code-fast-1
 #   fallback_chain: []
 
+# OpenRouter recipe — prompt-injection-screen (uncomment for Qwen 3)
+# prompt-injection-screen:
+#   adapter_name: openrouter
+#   model_id: openrouter/qwen/qwen3-235b-a22b
+#   fallback_chain: []
+
 # Grok recipe — summary (add this role to enable Grok-based summarisation)
 # summary:
 #   adapter_name: xai
 #   model_id: xai/grok-code-fast-1
 #   fallback_chain: []
 
+# OpenRouter recipe — summary (add this role for OpenRouter-based summarisation)
+# summary:
+#   adapter_name: openrouter
+#   model_id: openrouter/qwen/qwen3-235b-a22b
+#   fallback_chain: []
+
 # Grok recipe — classifier (add this role to enable Grok-based classification)
 # classifier:
 #   adapter_name: xai
 #   model_id: xai/grok-code-fast-1
+#   fallback_chain: []
+
+# OpenRouter recipe — classifier (add this role for OpenRouter-based classification)
+# classifier:
+#   adapter_name: openrouter
+#   model_id: openrouter/qwen/qwen3-235b-a22b
 #   fallback_chain: []

@@ -7,9 +7,16 @@ Design constraints (from ``docs/plans/multi-model-orchestration.md``):
   under-counting. ``stream=False`` is hard-coded in every outbound request
   body. Tests assert this lock is never bypassed regardless of caller kwargs.
 
-- **Cost from header.** ``InferenceResult.cost_usd`` is read from the
-  ``x-litellm-response-cost`` response header. Falls back to ``0.0`` and
-  logs a warning when the header is absent (e.g. a non-LiteLLM backend).
+- **Cost extraction — two-tier lookup.**
+
+  Primary: ``x-litellm-response-cost`` response header (LiteLLM standard).
+
+  Secondary: ``usage.total_cost`` field in the response body (OpenRouter
+  quirk — see T2-42).  OpenRouter returns the incurred cost inside the JSON
+  body rather than as a response header.  When the header is absent *and*
+  ``usage.total_cost`` is a positive number, that value is used instead.
+  Falls back to ``0.0`` and logs a warning only when *both* sources are
+  unavailable.
 
 - **Typed errors.** 4xx/5xx responses raise ``InferenceAuthError``,
   ``InferenceRateLimitError``, or ``InferenceServiceError`` so callers can
@@ -227,21 +234,56 @@ class InferenceGateway:
 
         body: dict[str, Any] = response.json()
 
-        # Cost from response header — the whole reason we hard-code stream=False.
+        # Cost extraction — two-tier lookup.
+        #
+        # Tier 1: x-litellm-response-cost header (LiteLLM standard path).
+        # Tier 2: usage.total_cost in the response body (OpenRouter quirk —
+        #         T2-42).  OpenRouter does not set the header; instead it
+        #         embeds the incurred cost inside the JSON usage block.
+        #
+        # We parse the body first (needed for both cost tiers and the rest of
+        # the result fields), then resolve cost in priority order.
         raw_cost = response.headers.get(self._COST_HEADER)
-        if raw_cost is None:
-            logger.warning(
-                "inference_gateway.cost_header_missing",
-                extra={"url": url, "model": requested_model},
-            )
-            cost_usd = 0.0
-        else:
+        if raw_cost is not None:
             try:
                 cost_usd = float(raw_cost)
             except ValueError:
                 logger.warning(
                     "inference_gateway.cost_header_invalid",
                     extra={"url": url, "raw": raw_cost},
+                )
+                cost_usd = 0.0
+        else:
+            # Tier 2 — try usage.total_cost from the response body.
+            # Body is parsed below; we need a preliminary read here.
+            body_cost = body.get("usage", {}).get("total_cost")
+            if body_cost is not None:
+                try:
+                    body_cost_f = float(body_cost)
+                    if body_cost_f > 0.0:
+                        cost_usd = body_cost_f
+                        logger.debug(
+                            "inference_gateway.cost_from_body",
+                            extra={"url": url, "model": requested_model,
+                                   "cost_usd": cost_usd},
+                        )
+                    else:
+                        # Zero or negative body cost — fall through to 0.0.
+                        logger.warning(
+                            "inference_gateway.cost_header_missing",
+                            extra={"url": url, "model": requested_model},
+                        )
+                        cost_usd = 0.0
+                except (ValueError, TypeError):
+                    logger.warning(
+                        "inference_gateway.cost_header_missing",
+                        extra={"url": url, "model": requested_model},
+                    )
+                    cost_usd = 0.0
+            else:
+                logger.warning(
+                    "inference_gateway.cost_header_missing",
+                    extra={"url": url, "model": requested_model},
                 )
                 cost_usd = 0.0
 

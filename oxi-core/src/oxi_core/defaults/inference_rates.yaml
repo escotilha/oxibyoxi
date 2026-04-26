@@ -55,6 +55,53 @@ claude-haiku-4-5-20251001:
     Fastest, cheapest Claude. oxi default for 'heartbeat-triage' and
     'prompt-injection-screen' roles.
 
+# OpenRouter models (T2-42)
+# --------------------------
+# Prices sourced from https://openrouter.ai/models (as of 2026-04).
+# OpenRouter returns cost in usage.total_cost (not the LiteLLM header);
+# the InferenceGateway reads this field automatically when the header
+# is absent.  Rate-card entries here are used for cost estimation and
+# budget-gate pre-checks; the authoritative per-call cost comes from
+# the usage.total_cost value in the response body.
+
+openrouter/qwen/qwen3-235b-a22b:
+  provider: openrouter
+  input_usd_per_mtok: 0.13
+  output_usd_per_mtok: 0.60
+  notes: >
+    Qwen 3 235B A22B via OpenRouter — preview-free anchor model (T2-42).
+    Mixture-of-experts architecture, 235B total / 22B active parameters,
+    excellent coding and reasoning at a very competitive price point.
+    Suitable for 'heartbeat-triage', 'classifier', and 'summary' roles.
+
+openrouter/meta-llama/llama-3.3-70b-instruct:
+  provider: openrouter
+  input_usd_per_mtok: 0.13
+  output_usd_per_mtok: 0.30
+  notes: >
+    Llama 3.3 70B Instruct via OpenRouter — strong open-weight model,
+    instruction-tuned by Meta.  Good all-round capability at a low
+    price; suitable as a 'worker' or 'critic' fallback when cost
+    matters more than peak capability.
+
+openrouter/deepseek/deepseek-chat-v3-0324:
+  provider: openrouter
+  input_usd_per_mtok: 0.27
+  output_usd_per_mtok: 1.10
+  notes: >
+    DeepSeek V3 via OpenRouter — top-tier open-weight code and reasoning
+    model.  Strong alternative to Claude Sonnet for 'critic' and 'worker'
+    roles where open-weight is preferred.
+
+openrouter/mistralai/mistral-large-2411:
+  provider: openrouter
+  input_usd_per_mtok: 2.0
+  output_usd_per_mtok: 6.0
+  notes: >
+    Mistral Large 2411 via OpenRouter — Mistral's flagship model.
+    Excellent multilingual capability and instruction-following;
+    a capable alternative for 'worker' roles on non-Anthropic plans.
+
 # xAI Grok models (T2-41)
 # -------------------------
 

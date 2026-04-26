@@ -53,6 +53,36 @@ anthropic:
   litellm_provider: anthropic
   virtual_key_env: LITELLM_VIRTUAL_KEY_ANTHROPIC
 
+openrouter:
+  # OpenRouter models are reached through LiteLLM's openrouter provider.
+  # The LiteLLM gateway must be provisioned with an OPENROUTER_API_KEY
+  # environment variable pointing at the operator's OpenRouter API key.
+  #
+  # OpenRouter quirk (T2-42): cost is returned in ``usage.total_cost``
+  # inside the response body rather than in the ``x-litellm-response-cost``
+  # header.  The InferenceGateway handles this automatically via its
+  # two-tier cost extraction: it checks the header first, then falls back
+  # to ``usage.total_cost``.  No special configuration is needed here.
+  #
+  # Provisioning steps:
+  #   1. Obtain an API key at https://openrouter.ai/keys
+  #   2. Set OPENROUTER_API_KEY=<your-key> in the LiteLLM proxy environment.
+  #   3. Add model entries in the LiteLLM config.yaml, e.g.:
+  #        - model_name: openrouter/qwen/qwen3-235b-a22b
+  #          litellm_params:
+  #            model: openrouter/qwen/qwen3-235b-a22b
+  #            api_base: https://openrouter.ai/api/v1
+  #            api_key: os.environ/OPENROUTER_API_KEY
+  #      (repeat for each OpenRouter model you want to expose)
+  #   4. Set the virtual key env var below so oxi can authenticate:
+  #        LITELLM_VIRTUAL_KEY_OPENROUTER=sk-<your-litellm-virtual-key>
+  #   5. Flip heartbeat-triage (or other roles) in routing.yaml to
+  #      adapter_name: openrouter and the desired model_id — no redeploy
+  #      of oxi-core needed.
+  base_url: https://openrouter.ai/api/v1
+  litellm_provider: openrouter
+  virtual_key_env: LITELLM_VIRTUAL_KEY_OPENROUTER
+
 xai:
   # xAI Grok models are reached through LiteLLM's xai provider.
   # The LiteLLM gateway must be provisioned with an XAI_API_KEY
